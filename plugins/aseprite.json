@@ -1,0 +1,8 @@
+{
+  "Id": "aseprite",
+  "Name": "Aseprite",
+  "ExecutableNames": ["aseprite.exe"],
+  "ProjectPicker": "aseprite-files",
+  "LaunchArguments": ["{file}"],
+  "WaitSeconds": 30
+}

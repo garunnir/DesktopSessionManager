@@ -1,0 +1,12 @@
+{
+  "name": "desktop-session-bridge",
+  "displayName": "Desktop Session Bridge",
+  "description": "Lists the files open in Aseprite so DesktopSessionManager can save and reopen them.",
+  "version": "1.0.0",
+  "author": { "name": "Garunnir" },
+  "contributes": {
+    "scripts": [
+      { "path": "./bridge.lua" }
+    ]
+  }
+}

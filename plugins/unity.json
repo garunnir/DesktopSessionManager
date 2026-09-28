@@ -1,0 +1,8 @@
+{
+  "Id": "unity",
+  "Name": "Unity Editor",
+  "ExecutableNames": ["Unity.exe"],
+  "ProjectPicker": "unity-folder",
+  "LaunchArguments": ["-projectPath", "{projectPath}"],
+  "WaitSeconds": 150
+}

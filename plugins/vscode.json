@@ -1,0 +1,8 @@
+{
+  "Id": "vscode",
+  "Name": "Visual Studio Code",
+  "ExecutableNames": ["Code.exe", "Code - Insiders.exe"],
+  "ProjectPicker": "workspace-or-folder",
+  "LaunchArguments": ["--new-window", "{projectPath}"],
+  "WaitSeconds": 45
+}

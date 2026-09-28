@@ -1,0 +1,8 @@
+{
+  "Id": "godot",
+  "Name": "Godot Editor",
+  "ExecutableNames": ["Godot_v4.7.2-stable_mono_win64.exe", "Godot.exe"],
+  "ProjectPicker": "godot-folder",
+  "LaunchArguments": ["--editor", "--path", "{projectPath}"],
+  "WaitSeconds": 90
+}

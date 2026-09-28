@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <!-- VirtualDesktopAccessor release DLL. Keep in sync with THIRD_PARTY_NOTICES.md -->
+  <PropertyGroup>
+    <VdaUrl>https://github.com/Ciantic/VirtualDesktopAccessor/releases/download/2024-12-16-windows11/VirtualDesktopAccessor.dll</VdaUrl>
+    <VdaSha256>8740c572a1c000e3b87ffeb1e4c397eae9af3bd4a2abdc3bcffacab4493f8ff5</VdaSha256>
+    <VdaPath>$(MSBuildProjectDirectory)\VirtualDesktopAccessor.dll</VdaPath>
+  </PropertyGroup>
+
+  <Target Name="FetchVirtualDesktopAccessor" BeforeTargets="AssignTargetPaths">
+    <DownloadFile Condition="!Exists('$(VdaPath)')" SourceUrl="$(VdaUrl)" DestinationFolder="$(MSBuildProjectDirectory)" />
+    <GetFileHash Files="$(VdaPath)" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="VdaActualHash" />
+    </GetFileHash>
+    <Error Condition="'$(VdaActualHash)' != '$(VdaSha256)'" Text="VirtualDesktopAccessor.dll SHA256 mismatch ($(VdaActualHash)). Delete the file and rebuild." />
+  </Target>
+
+  <!-- Copied beside the EXE so `dotnet run` works; build.cmd places them in dist for publish. -->
+  <ItemGroup>
+    <None Include="VirtualDesktopAccessor.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+    <None Include="plugins\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+</Project>

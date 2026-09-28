@@ -1,0 +1,8 @@
+{
+  "Id": "example",
+  "Name": "Example IDE",
+  "ExecutableNames": ["Example.exe"],
+  "ProjectPicker": "folder",
+  "LaunchArguments": ["--project", "{projectPath}"],
+  "WaitSeconds": 45
+}
