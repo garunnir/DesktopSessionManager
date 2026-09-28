@@ -7,12 +7,8 @@ if errorlevel 1 (
  pause
  exit /b 1
 )
-rem The csproj downloads every VirtualDesktopAccessor release in its table into vda\ (SHA256 checked); publish copies them to dist\vda\.
-dotnet publish DesktopSessionManager.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true -o "%~dp0dist"
+rem scripts\package.ps1 publishes the single EXE with vda\, plugins\, integrations\ and notices into dist\ (same as the release workflow).
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\package.ps1" -Out "%~dp0dist"
 if errorlevel 1 (echo Build failed & pause & exit /b 1)
-copy /Y "%~dp0THIRD_PARTY_NOTICES.md" "%~dp0dist\" >nul
-if not exist "%~dp0dist\plugins" mkdir "%~dp0dist\plugins"
-xcopy /E /I /Y "%~dp0plugins\*" "%~dp0dist\plugins\" >nul
-xcopy /E /I /Y "%~dp0integrations\*" "%~dp0dist\integrations\" >nul
 echo Output: %~dp0dist\DesktopSessionManager.exe
 pause

@@ -1,0 +1,77 @@
+name: Release
+
+# 1) v1.2.3 태그를 push하면 그 버전으로 릴리즈합니다.
+# 2) VirtualDesktopAccessor 업데이트 PR(deps/virtualdesktopaccessor)이 머지되면 패치 버전을 올려 자동 릴리즈합니다.
+#    새 Windows 빌드 지원은 앱 릴리즈로만 사용자에게 전달되기 때문입니다.
+on:
+  push:
+    tags: ['v*.*.*']
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.merged && github.event.pull_request.head.ref == 'deps/virtualdesktopaccessor')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.ref }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Decide version
+        id: ver
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_EVENT_NAME -eq 'push') {
+            $tag = $env:GITHUB_REF_NAME
+          } else {
+            $last = git tag --list 'v*.*.*' --sort=-v:refname | Select-Object -First 1
+            if ($last) {
+              $v = [version]$last.TrimStart('v')
+              $tag = "v$($v.Major).$($v.Minor).$($v.Build + 1)"
+            } else {
+              $tag = 'v0.1.0'
+            }
+          }
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') { throw "태그 형식은 v1.2.3 이어야 합니다: $tag" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($Matches[1])" >> $env:GITHUB_OUTPUT
+          Write-Host "릴리즈 버전: $tag"
+
+      - name: Verify VirtualDesktopAccessor table
+        shell: pwsh
+        run: ./scripts/update-vda.ps1 -VerifyAll
+
+      - name: Package
+        shell: pwsh
+        run: ./scripts/package.ps1 -Version '${{ steps.ver.outputs.version }}' -Out "$env:RUNNER_TEMP/release/dist" -Zip
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          TARGET: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+        run: |
+          $dir = "$env:RUNNER_TEMP/release"
+          $title = "Desktop Session Manager $env:TAG"
+          if ($env:GITHUB_EVENT_NAME -ne 'push') { $title += ' (VirtualDesktopAccessor 업데이트)' }
+          gh release create $env:TAG "$dir/DesktopSessionManager-$env:VERSION-win-x64.zip" `
+            --target $env:TARGET --title $title --notes-file "$dir/release-notes.md" --generate-notes
+          if ($LASTEXITCODE -ne 0) { throw 'gh release create 실패' }

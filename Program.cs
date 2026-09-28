@@ -205,10 +205,12 @@ public sealed class MainForm : Form
     private readonly PluginCatalog pluginsCatalog = new();
     private readonly Button managePlugins = new() { Text="확장 기능 관리", Width=130 };
     private readonly Button reloadPlugins = new() { Text="확장 새로고침", Width=120 };
+    private readonly LinkLabel updateLink = new() { AutoSize=true, Visible=false, Margin=new Padding(12,7,3,0) };
 
     public MainForm()
     {
         Text="Desktop Session Manager — 가상 데스크톱별 저장/복원";
+        if(Updates.Enabled) Text+=$" v{Updates.Current}";
 #if DEBUG
         Text+=" [DEV]";
 #endif
@@ -219,7 +221,7 @@ public sealed class MainForm : Form
         var scan=new Button{Text="현재 창 새로고침",Width=130};
         var save=new Button{Text="체크된 창 저장",Width=125};
         var row1=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(8)};
-        row1.Controls.AddRange([scan,setProject,managePlugins,reloadPlugins,new Label{Text="   프로필 이름:",AutoSize=true,TextAlign=System.Drawing.ContentAlignment.MiddleCenter,Margin=new Padding(8,7,3,0)},name,save]);
+        row1.Controls.AddRange([scan,setProject,managePlugins,reloadPlugins,new Label{Text="   프로필 이름:",AutoSize=true,TextAlign=System.Drawing.ContentAlignment.MiddleCenter,Margin=new Padding(8,7,3,0)},name,save,updateLink]);
         var checkAll=new Button{Text="모두 체크",Width=90};
         var uncheckAll=new Button{Text="모두 해제",Width=90};
         var rowFind=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(8,0,8,4)};
@@ -263,7 +265,32 @@ public sealed class MainForm : Form
         }
         scan.Enabled=save.Enabled=restore.Enabled=apiReady;
         if(apiReady) RefreshWindows();
+        updateLink.LinkClicked+=(_,_)=>OpenUrl((string)updateLink.Tag!);
+        Shown+=async (_,_)=>await CheckForUpdate();
     }
+    private async Task CheckForUpdate()
+    {
+        if(!Updates.Enabled) {if(!Vda.Loaded) Write("최신 버전: "+Updates.ReleasesUrl); return;}
+        (Version Version,string Url)? latest;
+        try {latest=await Updates.CheckAsync();}
+        catch(Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+            Write("업데이트 확인 실패: "+ex.Message);
+            if(!Vda.Loaded) Write("최신 버전: "+Updates.ReleasesUrl);
+            return;
+        }
+        if(latest==null)
+        {
+            if(!Vda.Loaded) Write("최신 버전도 이 Windows 빌드를 지원하지 않습니다. VirtualDesktopAccessor 새 릴리즈 이후 업데이트가 나옵니다.");
+            return;
+        }
+        var (version,url)=latest.Value;
+        Write($"새 버전 v{version}: {url}");
+        updateLink.Text=$"새 버전 v{version} 다운로드"; updateLink.Tag=url; updateLink.Visible=true;
+        if(!Vda.Loaded && MessageBox.Show(this,$"이 Windows 빌드용 VirtualDesktopAccessor가 없습니다.\n새 버전 v{version}에서 지원될 수 있습니다. 다운로드 페이지를 열까요?",
+            "Desktop Session Manager",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)==DialogResult.Yes) OpenUrl(url);
+    }
+    private static void OpenUrl(string url) => Process.Start(new ProcessStartInfo(url){UseShellExecute=true});
     private void Write(string s) => log.AppendText($"[{DateTime.Now:HH:mm:ss}] {s}{Environment.NewLine}");
     private static string PluginIdOf(SavedWindow w) =>
         w.PluginId!="" ? w.PluginId : w.ProjectKind switch {"vscode"=>"vscode", "unity"=>"unity",_=>""};

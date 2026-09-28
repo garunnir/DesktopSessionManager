@@ -7,6 +7,10 @@
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- Local builds stay 0.0.0 (update check off); releases pass /p:Version from the git tag. -->
+    <Version>0.0.0</Version>
+    <!-- Only applies to self-contained single-file publish (build.cmd, release workflow). -->
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
   <!--

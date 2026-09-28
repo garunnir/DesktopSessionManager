@@ -14,7 +14,14 @@ LLM으로 만든 내 작업환경 저장/로드 프로그램
 
 ## 빌드
 
-`build.cmd`를 실행하면 `dist/`에 EXE, `vda/`, `plugins/`, `THIRD_PARTY_NOTICES.md`가 만들어집니다.
+`build.cmd`를 실행하면 `dist/`에 EXE, `vda/`, `plugins/`, `integrations/`, `THIRD_PARTY_NOTICES.md`가 만들어집니다
+(`scripts/package.ps1`). 로컬 빌드는 버전이 0.0.0이며 업데이트 확인을 하지 않습니다.
+
+## 릴리즈
+
+- `v1.2.3` 형식의 태그를 push하면 `.github/workflows/release.yml`이 VDA 테이블 검증 → 패키징 → GitHub Release(zip, 지원 Windows 표, SHA256)를 만듭니다.
+- VirtualDesktopAccessor 업데이트 PR을 머지하면 패치 버전을 올려 자동으로 릴리즈합니다.
+- 앱은 시작할 때 GitHub의 최신 릴리즈를 확인해 새 버전 링크를 보여 줍니다. 실행 중인 Windows용 DLL이 없으면 다운로드 페이지를 열지 묻습니다.
 
 ## 개발 중 실행
 
