@@ -13,6 +13,7 @@ internal static class Program
     private static void Main()
     {
         ApplicationConfiguration.Initialize();
+        Vda.Initialize();
         Application.Run(new MainForm());
     }
 }
@@ -246,15 +247,19 @@ public sealed class MainForm : Form
         Directory.CreateDirectory(folder); RefreshProfiles(); LoadProjectCache();
         foreach(var error in pluginsCatalog.Reload()) Write("확장 설정 오류: "+error);
         Write($"프로젝트 복원 확장 {pluginsCatalog.All.Count}개 로드됨. 설정 폴더: {pluginsCatalog.Folder}");
-        try
+        Write(Vda.Status);
+        if(Vda.Loaded)
         {
-            int count=Native.GetDesktopCount();
-            apiReady=count>0;
-            Write(apiReady ? $"가상 데스크톱 연결 성공: {count}개" : "가상 데스크톱 조회 실패(-1). DLL/Windows 빌드 호환성을 확인하세요.");
-        }
-        catch (Exception ex) when (ex is DllNotFoundException or BadImageFormatException or EntryPointNotFoundException)
-        {
-            Write("VirtualDesktopAccessor.dll을 EXE 옆에 배치하세요. " + ex.Message);
+            try
+            {
+                int count=Native.GetDesktopCount();
+                apiReady=count>0;
+                Write(apiReady ? $"가상 데스크톱 연결 성공: {count}개" : "가상 데스크톱 조회 실패(-1). 이 Windows 빌드와 DLL이 맞지 않을 수 있습니다. 앱을 업데이트하세요.");
+            }
+            catch (EntryPointNotFoundException ex)
+            {
+                Write("VirtualDesktopAccessor 함수 누락: " + ex.Message);
+            }
         }
         scan.Enabled=save.Enabled=restore.Enabled=apiReady;
         if(apiReady) RefreshWindows();

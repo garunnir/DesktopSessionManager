@@ -1,0 +1,55 @@
+name: Update VirtualDesktopAccessor
+
+on:
+  schedule:
+    - cron: '0 0 * * 1' # 매주 월요일 09:00 KST
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '특정 릴리즈 태그 (비우면 테이블에 없는 모든 릴리즈)'
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-vda
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Detect, verify and add new releases
+        id: vda
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/update-vda.ps1 -Tag '${{ inputs.tag }}'
+
+      # 지원 빌드를 추론하지 못한 항목은 Build="?"라서 빌드가 실패하므로, 그 경우 초안 PR만 엽니다.
+      - name: Build (downloads every DLL in the table and checks SHA256)
+        if: steps.vda.outputs.updated == 'true' && steps.vda.outputs.needs_review != 'true'
+        run: dotnet build DesktopSessionManager.csproj -c Release
+
+      - name: Create pull request
+        if: steps.vda.outputs.updated == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: deps/virtualdesktopaccessor
+          delete-branch: true
+          commit-message: 'Add VirtualDesktopAccessor ${{ steps.vda.outputs.tags }}'
+          title: "${{ steps.vda.outputs.needs_review == 'true' && '[지원 빌드 확인 필요] ' || '' }}Add VirtualDesktopAccessor ${{ steps.vda.outputs.tags }}"
+          body-path: ${{ steps.vda.outputs.notes_path }}
+          draft: ${{ steps.vda.outputs.needs_review == 'true' }}
+          labels: dependencies
+          add-paths: |
+            DesktopSessionManager.csproj
+            THIRD_PARTY_NOTICES.md

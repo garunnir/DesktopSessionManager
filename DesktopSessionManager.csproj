@@ -9,24 +9,58 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
-  <!-- VirtualDesktopAccessor release DLL. Keep in sync with THIRD_PARTY_NOTICES.md -->
-  <PropertyGroup>
-    <VdaUrl>https://github.com/Ciantic/VirtualDesktopAccessor/releases/download/2024-12-16-windows11/VirtualDesktopAccessor.dll</VdaUrl>
-    <VdaSha256>8740c572a1c000e3b87ffeb1e4c397eae9af3bd4a2abdc3bcffacab4493f8ff5</VdaSha256>
-    <VdaPath>$(MSBuildProjectDirectory)\VirtualDesktopAccessor.dll</VdaPath>
-  </PropertyGroup>
+  <!--
+    VirtualDesktopAccessor releases and the Windows builds each one supports.
+    This table is the single source of truth: the build downloads every DLL into vda\<tag>\,
+    checks its SHA256, and embeds the table in the EXE. At startup the app picks the entry
+    whose Build matches the running Windows (after VdaBuildAlias) with the highest MinUbr <= UBR,
+    and refuses to load any DLL if none matches.
+    scripts\update-vda.ps1 adds new releases here. Keep THIRD_PARTY_NOTICES.md in sync.
+  -->
+  <ItemGroup>
+    <VdaRelease Include="2024-12-16-windows11" Build="26100" MinUbr="2605" Sha256="8740c572a1c000e3b87ffeb1e4c397eae9af3bd4a2abdc3bcffacab4493f8ff5" />
+    <VdaRelease Include="2024-01-25-windows11" Build="22621" MinUbr="3085" Sha256="f78ff6334f6c0ef5175ec0819026cec31d421a564b9ed1ee1ac4b6ed98d4f999" />
+    <VdaRelease Include="2023-11-10-windows11" Build="22621" MinUbr="2215" Sha256="6fde6f5f409b026688f01ac44973a9d95fb37ae71632e4cbdd8bdd8c7f7c9c17" />
+    <VdaRelease Include="2023-02-22-windows11" Build="22621" MinUbr="0" Sha256="f6dc5f4acd7f1553769eda0a84e63fbc004e530132fe66fa69ae944fab8a234e" />
+    <!-- Releases checked and deliberately not used; update-vda.ps1 skips them. -->
+    <VdaIgnoredRelease Include="2023-08-31-windows11" Reason="2023-11-10-windows11이 같은 빌드를 지원하며 메모리 손상 버그를 수정함" />
+    <VdaIgnoredRelease Include="2019-windows10" Reason="CreateDesktop, GetDesktopName export 없음" />
+    <!-- Enablement-package builds that share code and UBR with a base build. -->
+    <VdaBuildAlias Include="22631" Base="22621" />
+    <VdaBuildAlias Include="26200" Base="26100" />
+  </ItemGroup>
 
-  <Target Name="FetchVirtualDesktopAccessor" BeforeTargets="AssignTargetPaths">
-    <DownloadFile Condition="!Exists('$(VdaPath)')" SourceUrl="$(VdaUrl)" DestinationFolder="$(MSBuildProjectDirectory)" />
-    <GetFileHash Files="$(VdaPath)" Algorithm="SHA256">
-      <Output TaskParameter="Hash" PropertyName="VdaActualHash" />
+  <Target Name="FetchVirtualDesktopAccessor" BeforeTargets="AssignTargetPaths" Outputs="%(VdaRelease.Identity)">
+    <PropertyGroup>
+      <_VdaDir>$(MSBuildProjectDirectory)\vda\%(VdaRelease.Identity)</_VdaDir>
+      <_VdaFile>$(_VdaDir)\VirtualDesktopAccessor.dll</_VdaFile>
+    </PropertyGroup>
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('%(VdaRelease.Build)|%(VdaRelease.MinUbr)', '^\d+\|\d+$'))" Text="VdaRelease %(VdaRelease.Identity): 릴리즈 노트를 보고 Build/MinUbr에 지원하는 최소 Windows 빌드를 숫자로 채우세요." />
+    <DownloadFile Condition="!Exists('$(_VdaFile)')" SourceUrl="https://github.com/Ciantic/VirtualDesktopAccessor/releases/download/%(VdaRelease.Identity)/VirtualDesktopAccessor.dll" DestinationFolder="$(_VdaDir)" />
+    <GetFileHash Files="$(_VdaFile)" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="_VdaHash" />
     </GetFileHash>
-    <Error Condition="'$(VdaActualHash)' != '$(VdaSha256)'" Text="VirtualDesktopAccessor.dll SHA256 mismatch ($(VdaActualHash)). Delete the file and rebuild." />
+    <Error Condition="'$(_VdaHash)' != '%(VdaRelease.Sha256)'" Text="vda\%(VdaRelease.Identity)\VirtualDesktopAccessor.dll SHA256 mismatch ($(_VdaHash)). Delete the file and rebuild." />
+    <ItemGroup>
+      <None Include="$(_VdaFile)" Link="vda\%(VdaRelease.Identity)\VirtualDesktopAccessor.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    </ItemGroup>
   </Target>
 
-  <!-- Copied beside the EXE so `dotnet run` works; build.cmd places them in dist for publish. -->
+  <Target Name="EmbedVdaTable" BeforeTargets="GetAssemblyAttributes">
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>VdaRelease</_Parameter1>
+        <_Parameter2>%(VdaRelease.Identity)|%(VdaRelease.Build)|%(VdaRelease.MinUbr)|%(VdaRelease.Sha256)</_Parameter2>
+      </AssemblyAttribute>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>VdaBuildAlias</_Parameter1>
+        <_Parameter2>%(VdaBuildAlias.Identity)|%(VdaBuildAlias.Base)</_Parameter2>
+      </AssemblyAttribute>
+    </ItemGroup>
+  </Target>
+
+  <!-- Copied beside the EXE so `dotnet run` works; build.cmd places plugins in dist for publish. -->
   <ItemGroup>
-    <None Include="VirtualDesktopAccessor.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
     <None Include="plugins\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,7 @@
+version: 2
+updates:
+  # 워크플로에서 쓰는 GitHub Actions 버전 갱신
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

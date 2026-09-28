@@ -1,0 +1,28 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # 테이블의 모든 VDA 릴리즈: SHA256, x64, Program.cs가 쓰는 export
+      - name: Verify VirtualDesktopAccessor table
+        shell: pwsh
+        run: ./scripts/update-vda.ps1 -VerifyAll
+
+      - name: Build
+        run: dotnet build DesktopSessionManager.csproj -c Release

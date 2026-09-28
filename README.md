@@ -4,14 +4,17 @@ LLM으로 만든 내 작업환경 저장/로드 프로그램
 ## 의존성
 
 - .NET 8 (WinForms). 빌드에는 .NET 8 이상 SDK가 필요합니다.
-- [VirtualDesktopAccessor](https://github.com/Ciantic/VirtualDesktopAccessor) 릴리즈 `2024-12-16-windows11`의 `VirtualDesktopAccessor.dll` (MIT)
-  - Windows 11 24H2 26100.2605 이상이 필요합니다.
-  - DLL은 저장소에 포함하지 않습니다. 빌드 시 공식 릴리즈에서 내려받고 SHA256을 확인합니다 (`DesktopSessionManager.csproj`).
-  - 버전·해시·라이선스 전문은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 있습니다.
+- [VirtualDesktopAccessor](https://github.com/Ciantic/VirtualDesktopAccessor)의 `VirtualDesktopAccessor.dll` (MIT)
+  - Windows 11 22H2(22621) 이상이 필요합니다. 21H2(22000)와 Windows 10은 지원하지 않습니다.
+  - VDA는 Windows 빌드마다 전용 DLL이 필요합니다. 여러 릴리즈를 `vda/<릴리즈>/`에 함께 배포하고,
+    실행할 때 Windows 빌드와 UBR을 확인해 맞는 DLL 하나만 SHA256 확인 후 로드합니다. 맞는 DLL이 없으면 아무것도 로드하지 않습니다.
+  - 릴리즈와 지원 빌드 표는 `DesktopSessionManager.csproj`의 `VdaRelease` 항목입니다. 빌드 시 공식 릴리즈에서 내려받고 SHA256을 확인합니다.
+  - 새 릴리즈는 `.github/workflows/update-vda.yml`이 매주 감지·검증해 PR을 엽니다 (로컬: `scripts/update-vda.ps1`).
+  - 릴리즈별 해시와 라이선스 전문은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 있습니다.
 
 ## 빌드
 
-`build.cmd`를 실행하면 `dist/`에 EXE, DLL, `plugins/`, `THIRD_PARTY_NOTICES.md`가 만들어집니다.
+`build.cmd`를 실행하면 `dist/`에 EXE, `vda/`, `plugins/`, `THIRD_PARTY_NOTICES.md`가 만들어집니다.
 
 ## 개발 중 실행
 
