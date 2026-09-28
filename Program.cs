@@ -203,8 +203,13 @@ public sealed class MainForm : Form
     private readonly ProjectCache projectCache=new(Path.Combine(DataRoot,"project-cache.json"));
     private bool apiReady;
     private readonly PluginCatalog pluginsCatalog = new();
-    private readonly Button managePlugins = new() { Text="확장 기능 관리", Width=130 };
-    private readonly Button reloadPlugins = new() { Text="확장 새로고침", Width=120 };
+    // Right half: the profile being edited. Windows dragged from the list are copied into it.
+    private readonly ListView editor = new() { Dock=DockStyle.Fill, View=View.Details, FullRowSelect=true, GridLines=true, HideSelection=false };
+    private readonly Label editorHeader = new() { AutoSize=true, Margin=new Padding(8,10,3,0) };
+    private readonly Button saveProfile = new() { Text="프로필 저장", Width=100 };
+    private readonly List<SavedWindow> editing=[];
+    private string? loadedProfile;
+    private bool editorDirty, suppressProfileLoad;
     private readonly LinkLabel updateLink = new() { AutoSize=true, Visible=false, Margin=new Padding(12,7,3,0) };
 
     public MainForm()
@@ -214,29 +219,37 @@ public sealed class MainForm : Form
 #if DEBUG
         Text+=" [DEV]";
 #endif
-        Width=1100; Height=720; MinimumSize=new System.Drawing.Size(820,510); StartPosition=FormStartPosition.CenterScreen;
+        Width=1400; Height=760; MinimumSize=new System.Drawing.Size(1000,560); StartPosition=FormStartPosition.CenterScreen;
         Font=new System.Drawing.Font("Malgun Gothic",9);
-        int[] widths=[145,320,120,170,240,330];
+        int[] widths=[120,240,110,150,200,280];
         for(int i=0;i<ColumnNames.Length;i++) windows.Columns.Add(ColumnNames[i],widths[i]);
         var scan=new Button{Text="현재 창 새로고침",Width=130};
-        var save=new Button{Text="체크된 창 저장",Width=125};
+        var addChecked=new Button{Text="체크된 창 프로필에 추가 ▶",Width=190};
         var row1=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(8)};
-        row1.Controls.AddRange([scan,setProject,managePlugins,reloadPlugins,new Label{Text="   프로필 이름:",AutoSize=true,TextAlign=System.Drawing.ContentAlignment.MiddleCenter,Margin=new Padding(8,7,3,0)},name,save,updateLink]);
+        row1.Controls.AddRange([scan,setProject,addChecked,updateLink]);
         var checkAll=new Button{Text="모두 체크",Width=90};
         var uncheckAll=new Button{Text="모두 해제",Width=90};
         var rowFind=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(8,0,8,4)};
         rowFind.Controls.AddRange([find,checkAll,uncheckAll,checkCount]);
-        var row2=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(8)};
-        row2.Controls.AddRange([new Label{Text="저장된 프로필:",AutoSize=true,Margin=new Padding(3,7,3,0)},profiles,restore,createDesktops]);
-        var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=6};
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.Percent,70));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute,25));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent,30));
-        layout.Controls.Add(row1,0,0); layout.Controls.Add(rowFind,0,1); layout.Controls.Add(windows,0,2); layout.Controls.Add(row2,0,3);
-        layout.Controls.Add(new Label{Text="플러그인(JSON) 설정은 재빌드 없이 새로고침 가능합니다. 프로젝트 경로는 창을 선택해 지정하며 미저장 변경사항은 복원하지 않습니다.",Dock=DockStyle.Fill,Padding=new Padding(8,4,0,0)},0,4);
-        layout.Controls.Add(log,0,5); Controls.Add(layout);
-        scan.Click+=(_,_)=>RefreshWindows(); setProject.Click+=(_,_)=>SetProject(); save.Click+=(_,_)=>SaveProfile();
-        managePlugins.Click+=(_,_)=>ManagePlugins(); reloadPlugins.Click+=(_,_)=>ReloadPlugins();
+        // Left half: currently open windows. Right half: profile editor (drop target).
+        var left=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3};
+        left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        left.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        left.Controls.Add(row1,0,0); left.Controls.Add(rowFind,0,1); left.Controls.Add(windows,0,2);
+        // FixedPanel.None keeps the split proportional when the window is resized.
+        var split=new SplitContainer{Dock=DockStyle.Fill,Orientation=Orientation.Vertical,FixedPanel=FixedPanel.None};
+        split.Panel1.Controls.Add(left); split.Panel2.Controls.Add(BuildProfileEditor());
+        Load+=(_,_)=>{split.Panel1MinSize=420;split.Panel2MinSize=320;split.SplitterDistance=split.Width/2;};
+        var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3};
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent,72)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute,25));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent,28));
+        layout.Controls.Add(split,0,0);
+        layout.Controls.Add(new Label{Text="플러그인(JSON) 설정은 재빌드 없이 새로고침 가능합니다. 프로젝트 경로는 창을 선택해 지정하며 미저장 변경사항은 복원하지 않습니다.",Dock=DockStyle.Fill,Padding=new Padding(8,4,0,0)},0,1);
+        layout.Controls.Add(log,0,2);
+        var menu=BuildMenu();
+        Controls.Add(layout); Controls.Add(menu); MainMenuStrip=menu;
+        scan.Click+=(_,_)=>RefreshWindows(); setProject.Click+=(_,_)=>SetProject(); addChecked.Click+=(_,_)=>AddChecked();
+        FormClosing+=(_,e)=>{if(!ConfirmDiscard()) e.Cancel=true;};
         restore.Click+=async (_,_)=>await RestoreProfile();
         checkAll.Click+=(_,_)=>SetVisibleChecked(true); uncheckAll.Click+=(_,_)=>SetVisibleChecked(false);
         find.TextChanged+=(_,_)=>ApplyFilter();
@@ -247,6 +260,7 @@ public sealed class MainForm : Form
         // ItemChecked also fires while the list creates its handle (e.Item can be null then), so only schedule a recount.
         windows.ItemChecked+=(_,_)=>{if(IsHandleCreated && !countPending){countPending=true;BeginInvoke(UpdateCheckCount);}};
         Directory.CreateDirectory(folder); RefreshProfiles(); LoadProjectCache();
+        if(profiles.Items.Count>0) profiles.SelectedIndex=0; else UpdateEditorHeader();
         foreach(var error in pluginsCatalog.Reload()) Write("확장 설정 오류: "+error);
         Write($"프로젝트 복원 확장 {pluginsCatalog.All.Count}개 로드됨. 설정 폴더: {pluginsCatalog.Folder}");
         Write(Vda.Status);
@@ -263,7 +277,7 @@ public sealed class MainForm : Form
                 Write("VirtualDesktopAccessor 함수 누락: " + ex.Message);
             }
         }
-        scan.Enabled=save.Enabled=restore.Enabled=apiReady;
+        scan.Enabled=saveProfile.Enabled=restore.Enabled=addChecked.Enabled=apiReady;
         if(apiReady) RefreshWindows();
         updateLink.LinkClicked+=(_,_)=>OpenUrl((string)updateLink.Tag!);
         Shown+=async (_,_)=>await CheckForUpdate();
@@ -337,8 +351,8 @@ public sealed class MainForm : Form
             {d.PluginId=plugin.Id;d.ProjectPath=found;detected++;}
             var item=new ListViewItem(System.IO.Path.GetFileNameWithoutExtension(d.Path)) {Checked=!d.Pinned, Tag=w};
             item.SubItems.Add(d.Title);
-            item.SubItems.Add($"{d.DesktopIndex+1}: {d.DesktopName}" + (d.Pinned?" [고정]":""));
-            item.SubItems.Add($"{d.Left},{d.Top} / {d.Width}×{d.Height}"); item.SubItems.Add(d.ProjectPath); item.SubItems.Add(d.Path);
+            item.SubItems.Add(DesktopLabel(d));
+            item.SubItems.Add(RectLabel(d)); item.SubItems.Add(d.ProjectPath); item.SubItems.Add(d.Path);
             item.UseItemStyleForSubItems=false; ShowProject(item);
             allItems.Add(item); checks[item]=item.Checked;
         }
@@ -408,12 +422,15 @@ public sealed class MainForm : Form
     private bool MissingProject(SavedWindow d) => d.ProjectPath=="" && pluginsCatalog.ForExe(d.Path) is {OpensFiles:false};
     private static string FilesLabel(List<string> files) =>
         $"파일 {files.Count}개: "+string.Join(", ",files.Select(x=>Path.GetFileName(x)));
+    private static string DesktopLabel(SavedWindow d) => $"{d.DesktopIndex+1}: {d.DesktopName}" + (d.Pinned?" [고정]":"");
+    private static string RectLabel(SavedWindow d) => $"{d.Left},{d.Top} / {d.Width}×{d.Height}";
+    private string ProjectLabel(SavedWindow d) =>
+        MissingProject(d) ? UnassignedProject : d.OpenFiles.Count>0 ? FilesLabel(d.OpenFiles) : d.ProjectPath;
     private void ShowProject(ListViewItem item)
     {
         var d=((LiveWindow)item.Tag!).Data; var cell=item.SubItems[4];
-        bool missing=MissingProject(d);
-        cell.Text=missing ? UnassignedProject : d.OpenFiles.Count>0 ? FilesLabel(d.OpenFiles) : d.ProjectPath;
-        cell.ForeColor=missing ? System.Drawing.Color.Firebrick : windows.ForeColor;
+        cell.Text=ProjectLabel(d);
+        cell.ForeColor=MissingProject(d) ? System.Drawing.Color.Firebrick : windows.ForeColor;
     }
     private void ReloadPlugins()
     {
@@ -421,6 +438,7 @@ public sealed class MainForm : Form
         Write($"확장 설정 새로고침: {pluginsCatalog.All.Count}개, 오류 {errors.Count}개");
         foreach(var error in errors) Write("확장 설정 오류: "+error);
         if(apiReady) RefreshWindows();
+        FillEditor(); // project warnings depend on the plugin rules
     }
     private void ManagePlugins()
     {
@@ -438,7 +456,7 @@ public sealed class MainForm : Form
             if(ed.ShowDialog(dialog)!=DialogResult.OK || ed.Result==null)return;
             try{pluginsCatalog.Save(ed.Result,selected.Plugin.Id);Fill();Write("확장 편집: "+ed.Result.Name);}catch(Exception ex){MessageBox.Show(ex.Message,"저장 실패");}};
         reload.Click+=(_,_)=>{ReloadPlugins();Fill();};
-        folderButton.Click+=(_,_)=>Process.Start(new ProcessStartInfo(pluginsCatalog.Folder){UseShellExecute=true});
+        folderButton.Click+=(_,_)=>OpenFolder(pluginsCatalog.Folder);
         dialog.FormClosed+=(_,_)=>ReloadPlugins();dialog.ShowDialog(this);
     }
     private sealed class PluginItem(AppPlugin p)
@@ -446,13 +464,191 @@ public sealed class MainForm : Form
         public AppPlugin Plugin {get;}=p;
         public override string ToString()=> $"{Plugin.Name} [{Plugin.Id}] — {string.Join(", ",Plugin.ExecutableNames)}";
     }
+    private MenuStrip BuildMenu()
+    {
+        static ToolStripMenuItem Item(string text,Action click,Keys keys=Keys.None)
+        {
+            var item=new ToolStripMenuItem(text){ShortcutKeys=keys};
+            item.Click+=(_,_)=>click();
+            return item;
+        }
+        var file=new ToolStripMenuItem("파일(&F)");
+        file.DropDownItems.AddRange([
+            Item("새 프로필",NewProfile,Keys.Control|Keys.N),
+            Item("프로필 저장",SaveEditedProfile,Keys.Control|Keys.S),
+            new ToolStripSeparator(),
+            Item("편집 중인 프로필 JSON 위치 열기",OpenProfileJson),
+            Item("프로필 폴더 열기",()=>OpenFolder(folder)),
+            Item("확장(플러그인) JSON 폴더 열기",()=>OpenFolder(pluginsCatalog.Folder)),
+            Item("프로젝트 경로 캐시 JSON 위치 열기",()=>ShowInExplorer(Path.Combine(DataRoot,"project-cache.json"))),
+            Item("데이터 폴더 열기",()=>OpenFolder(DataRoot)),
+            new ToolStripSeparator(),
+            Item("종료",Close)]);
+        var plugins=new ToolStripMenuItem("확장(&E)");
+        plugins.DropDownItems.AddRange([
+            Item("확장 기능 관리...",ManagePlugins),
+            Item("확장 새로고침",ReloadPlugins)]);
+        var menu=new MenuStrip{Dock=DockStyle.Top};
+        menu.Items.AddRange([file,plugins]);
+        return menu;
+    }
+    private static void OpenFolder(string path)
+    {
+        Directory.CreateDirectory(path);
+        Process.Start(new ProcessStartInfo(path){UseShellExecute=true});
+    }
+    // Opens Explorer with the file selected, or the containing folder when the file does not exist yet.
+    private static void ShowInExplorer(string file)
+    {
+        if(File.Exists(file)) Process.Start(new ProcessStartInfo("explorer.exe",$"/select,\"{file}\""));
+        else OpenFolder(Path.GetDirectoryName(file)!);
+    }
+    private Control BuildProfileEditor()
+    {
+        editorHeader.Font=new System.Drawing.Font(Font,System.Drawing.FontStyle.Bold);
+        var newProfile=new Button{Text="새 프로필",Width=90};
+        var top=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(4)};
+        top.Controls.AddRange([new Label{Text="프로필:",AutoSize=true,Margin=new Padding(3,7,3,0)},profiles,newProfile,restore,createDesktops]);
+        var hint=new Label{Text="왼쪽 창 목록에서 창을 끌어다 놓으면 이 프로필에 추가됩니다. 여러 창을 선택해 한 번에 끌 수 있고, 같은 창을 다시 놓으면 최신 상태로 바뀝니다. Delete 키로 제거.",
+            AutoSize=true,ForeColor=System.Drawing.SystemColors.GrayText,Margin=new Padding(8,0,8,6),MaximumSize=new System.Drawing.Size(560,0)};
+        string[] columns=["프로그램","창 제목","데스크톱","창 위치/크기","프로젝트 경로"]; int[] widths=[110,200,100,140,200];
+        for(int i=0;i<columns.Length;i++) editor.Columns.Add(columns[i],widths[i]);
+        editor.KeyDown+=(_,e)=>{if(e.KeyCode==Keys.Delete){RemoveFromEditor();e.Handled=true;}};
+        var remove=new Button{Text="선택 제거",Width=90}; var openJson=new Button{Text="JSON 위치 열기",Width=115};
+        var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(4)};
+        bottom.Controls.AddRange([new Label{Text="이름:",AutoSize=true,Margin=new Padding(3,7,3,0)},name,saveProfile,remove,openJson]);
+        var panel=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5};
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent,100)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.Controls.Add(editorHeader,0,0); panel.Controls.Add(top,0,1); panel.Controls.Add(hint,0,2); panel.Controls.Add(editor,0,3); panel.Controls.Add(bottom,0,4);
+        panel.SizeChanged+=(_,_)=>hint.MaximumSize=new System.Drawing.Size(Math.Max(200,panel.ClientSize.Width-20),0);
+        profiles.SelectedIndexChanged+=(_,_)=>OnProfileSelected();
+        newProfile.Click+=(_,_)=>NewProfile(); remove.Click+=(_,_)=>RemoveFromEditor();
+        saveProfile.Click+=(_,_)=>SaveEditedProfile(); openJson.Click+=(_,_)=>OpenProfileJson();
+        name.TextChanged+=(_,_)=>UpdateEditorHeader();
+        EnableWindowDrop(panel,panel);
+        windows.ItemDrag+=(_,e)=>
+        {
+            if(e.Item is not ListViewItem dragged) return;
+            // Dragging one of several selected rows carries all of them.
+            IEnumerable<ListViewItem> items=dragged.Selected ? windows.SelectedItems.Cast<ListViewItem>() : new[]{dragged};
+            windows.DoDragDrop(items.Select(x=>((LiveWindow)x.Tag!).Data).ToArray(),DragDropEffects.Copy);
+        };
+        return panel;
+    }
+    // Drag events do not bubble, so every child of the drop area needs its own handlers.
+    private void EnableWindowDrop(Control area,Control target)
+    {
+        target.AllowDrop=true;
+        static SavedWindow[]? Dragged(DragEventArgs e) => e.Data?.GetData(typeof(SavedWindow[])) as SavedWindow[];
+        target.DragEnter+=(_,e)=>
+        {
+            bool ok=Dragged(e) is {Length:>0};
+            e.Effect=ok ? DragDropEffects.Copy : DragDropEffects.None;
+            area.BackColor=ok ? System.Drawing.SystemColors.Info : System.Drawing.SystemColors.Control;
+        };
+        target.DragLeave+=(_,_)=>area.BackColor=System.Drawing.SystemColors.Control;
+        target.DragDrop+=(_,e)=>
+        {
+            area.BackColor=System.Drawing.SystemColors.Control;
+            if(Dragged(e) is {Length:>0} dropped) AddToEditor(dropped);
+        };
+        foreach(Control child in target.Controls) EnableWindowDrop(area,child);
+    }
+    private static bool SameWindow(SavedWindow a,SavedWindow b) =>
+        a.Path.Equals(b.Path,StringComparison.OrdinalIgnoreCase) && a.Title==b.Title && a.DesktopIndex==b.DesktopIndex
+        && a.Left==b.Left && a.Top==b.Top && a.Width==b.Width && a.Height==b.Height;
+    // Stores copies: the scanned objects keep changing (project assignment, rescans).
+    private void AddToEditor(IEnumerable<SavedWindow> source)
+    {
+        int added=0,updated=0;
+        foreach(var d in source)
+        {
+            var copy=JsonSerializer.Deserialize<SavedWindow>(JsonSerializer.Serialize(d))!;
+            int at=editing.FindIndex(x=>SameWindow(x,d));
+            if(at>=0) {editing[at]=copy;updated++;}
+            else {editing.Add(copy);added++;}
+        }
+        if(added+updated==0) return;
+        editorDirty=true; FillEditor();
+        Write($"프로필 편집: 창 {added}개 추가"+(updated>0?$", {updated}개 최신 상태로 갱신":"")+" (프로필 저장을 눌러 반영하세요)");
+    }
+    private void AddChecked()
+    {
+        CaptureChecks();
+        var picked=allItems.Where(x=>checks[x]).Select(x=>((LiveWindow)x.Tag!).Data).ToList();
+        if(picked.Count==0) {MessageBox.Show("프로필에 추가할 창을 하나 이상 체크하세요.");return;}
+        AddToEditor(picked);
+    }
+    private void RemoveFromEditor()
+    {
+        var gone=editor.SelectedItems.Cast<ListViewItem>().Select(x=>(SavedWindow)x.Tag!).ToList();
+        if(gone.Count==0) return;
+        editing.RemoveAll(gone.Contains);
+        editorDirty=true; FillEditor();
+    }
+    private void FillEditor()
+    {
+        editor.BeginUpdate();
+        try
+        {
+            editor.Items.Clear();
+            foreach(var d in editing)
+            {
+                var item=new ListViewItem(Path.GetFileNameWithoutExtension(d.Path)){Tag=d,UseItemStyleForSubItems=false};
+                item.SubItems.Add(d.Title); item.SubItems.Add(DesktopLabel(d)); item.SubItems.Add(RectLabel(d));
+                var cell=item.SubItems.Add(ProjectLabel(d));
+                cell.ForeColor=MissingProject(d) ? System.Drawing.Color.Firebrick : editor.ForeColor;
+                editor.Items.Add(item);
+            }
+        }
+        finally { editor.EndUpdate(); }
+        UpdateEditorHeader();
+    }
+    private void UpdateEditorHeader()
+    {
+        string title=loadedProfile ?? "새 프로필";
+        editorHeader.Text=$"프로필 편집 — {title} · 창 {editing.Count}개"+(editorDirty || name.Text.Trim()!=(loadedProfile ?? "") ? " (저장 안 됨)" : "");
+    }
+    private bool ConfirmDiscard() => !editorDirty
+        || MessageBox.Show(this,"편집 중인 프로필에 저장하지 않은 변경이 있습니다. 버리고 계속할까요?","프로필 편집",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)==DialogResult.Yes;
+    private void OnProfileSelected()
+    {
+        if(suppressProfileLoad) return;
+        string? p=profiles.SelectedItem as string;
+        if(p==loadedProfile) return;
+        if(!ConfirmDiscard()) {SelectProfileQuietly(loadedProfile);return;}
+        LoadIntoEditor(p);
+    }
+    private void SelectProfileQuietly(string? p)
+    {
+        suppressProfileLoad=true;
+        try { if(p!=null && profiles.Items.Contains(p)) profiles.SelectedItem=p; else profiles.SelectedIndex=-1; }
+        finally { suppressProfileLoad=false; }
+    }
+    private void LoadIntoEditor(string? p)
+    {
+        editing.Clear();
+        if(p!=null && ReadProfile(p) is {} data) editing.AddRange(data.Windows);
+        loadedProfile=p; editorDirty=false; name.Text=p ?? "";
+        FillEditor();
+    }
+    private void NewProfile()
+    {
+        if(!ConfirmDiscard()) return;
+        SelectProfileQuietly(null); LoadIntoEditor(null); name.Focus();
+    }
+    private void OpenProfileJson()
+    {
+        if(loadedProfile!=null) ShowInExplorer(ProfilePath(loadedProfile)); else OpenFolder(folder);
+    }
     private void SetProject()
     {
         if(windows.SelectedItems.Count!=1 || windows.SelectedItems[0].Tag is not LiveWindow selected)
         {MessageBox.Show("프로젝트를 지정할 창을 하나 선택하세요. (체크가 아닌 행 선택)");return;}
         SavedWindow w=selected.Data;
         var plugin=pluginsCatalog.ForExe(w.Path);
-        if(plugin==null){MessageBox.Show("해당 EXE의 확장 규칙이 없습니다. [확장 기능 관리]에서 먼저 추가하세요.");return;}
+        if(plugin==null){MessageBox.Show("해당 EXE의 확장 규칙이 없습니다. [확장 → 확장 기능 관리]에서 먼저 추가하세요.");return;}
         if(plugin.OpensFiles)
         {
             using var pick=new OpenFileDialog{Multiselect=true,Title="복원할 때 열 파일 선택 (여러 개 가능)",
@@ -460,7 +656,7 @@ public sealed class MainForm : Form
             if(pick.ShowDialog()!=DialogResult.OK)return;
             w.PluginId=plugin.Id; w.ProjectKind=""; w.ProjectPath=""; w.OpenFiles=pick.FileNames.ToList();
             ShowProject(windows.SelectedItems[0]);
-            Write($"{plugin.Name} {FilesLabel(w.OpenFiles)} (프로필 저장을 눌러 반영하세요)");
+            Write($"{plugin.Name} {FilesLabel(w.OpenFiles)} (이 창을 오른쪽 프로필에 끌어다 놓고 저장하세요)");
             return;
         }
         string chosen="";
@@ -488,35 +684,51 @@ public sealed class MainForm : Form
         w.PluginId=plugin.Id; w.ProjectKind="";w.ProjectPath=chosen;
         projectCache.Remember(plugin.Id,chosen); SaveProjectCache();
         ShowProject(windows.SelectedItems[0]);
-        Write($"{plugin.Name} 프로젝트 지정: {chosen} (프로필 저장을 눌러 반영하세요)");
+        Write($"{plugin.Name} 프로젝트 지정: {chosen} (이 창을 오른쪽 프로필에 끌어다 놓고 저장하세요)");
     }
     private string ProfilePath(string p) => Path.Combine(folder, p + ".json");
+    // Repopulates the list without loading anything into the editor; keeps the edited profile selected.
     private void RefreshProfiles()
     {
-        string? previous=profiles.SelectedItem?.ToString(); profiles.Items.Clear();
-        foreach(var f in Directory.GetFiles(folder,"*.json")) profiles.Items.Add(Path.GetFileNameWithoutExtension(f));
-        if(previous!=null && profiles.Items.Contains(previous)) profiles.SelectedItem=previous;
-        else if(profiles.Items.Count>0) profiles.SelectedIndex=0;
+        suppressProfileLoad=true;
+        try
+        {
+            profiles.Items.Clear();
+            foreach(var f in Directory.GetFiles(folder,"*.json")) profiles.Items.Add(Path.GetFileNameWithoutExtension(f));
+            if(loadedProfile!=null && profiles.Items.Contains(loadedProfile)) profiles.SelectedItem=loadedProfile;
+        }
+        finally { suppressProfileLoad=false; }
     }
-    private void SaveProfile()
+    private Snapshot? ReadProfile(string p)
     {
+        Snapshot? data;
+        try { data=JsonSerializer.Deserialize<Snapshot>(File.ReadAllText(ProfilePath(p),Encoding.UTF8)); }
+        catch(Exception ex) {Write("읽기 실패: "+ex.Message);return null;}
+        if(data==null || (data.SchemaVersion!=1 && data.SchemaVersion!=2 && data.SchemaVersion!=3) || data.Windows==null) {Write("지원하지 않는 프로필 형식.");return null;}
+        return data;
+    }
+    private void SaveEditedProfile()
+    {
+        if(!saveProfile.Enabled) return; // Ctrl+S while the virtual desktop API is unavailable
         string p=name.Text.Trim();
         if (string.IsNullOrWhiteSpace(p) || p.Length>60 || p.IndexOfAny(Path.GetInvalidFileNameChars())>=0 || p.EndsWith('.') || p.EndsWith(' '))
-        { MessageBox.Show("프로필 이름(1~60자)을 입력하세요. 파일명에 사용할 수 없는 문자는 제외하세요."); return; }
-        CaptureChecks();
-        var picked=allItems.Where(x=>checks[x]).Select(x=>((LiveWindow)x.Tag!).Data).ToList();
-        if(picked.Count==0) { MessageBox.Show("저장할 창을 하나 이상 체크하세요."); return; }
+        { MessageBox.Show("프로필 이름(1~60자)을 입력하세요. 파일명에 사용할 수 없는 문자는 제외하세요."); name.Focus(); return; }
+        var picked=editing.ToList();
+        if(picked.Count==0) { MessageBox.Show("프로필에 창이 없습니다. 왼쪽 창 목록에서 창을 끌어다 놓으세요."); return; }
         var missing=picked.Where(MissingProject).ToList();
         if(missing.Count>0 && MessageBox.Show($"{missing.Count}개 창은 프로젝트 경로 없이 저장됩니다. 복원 시 프로그램만 실행되고 프로젝트는 열리지 않을 수 있습니다.\n\n"
             +string.Join("\n",missing.Take(10).Select(x=>"· "+x.Title))+(missing.Count>10?"\n…":"")
-            +"\n\n그래도 저장할까요? ([아니오] 후 [선택 창 프로젝트 지정]으로 지정할 수 있습니다.)","프로젝트 미지정",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes) return;
+            +"\n\n그래도 저장할까요? ([아니오] 후 왼쪽에서 [선택 창 프로젝트 지정]을 하고 그 창을 다시 끌어다 놓으세요.)","프로젝트 미지정",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes) return;
         string path=ProfilePath(p);
-        if(File.Exists(path) && MessageBox.Show("동일한 이름의 프로필을 덮어쓸까요?","확인",MessageBoxButtons.YesNo)!=DialogResult.Yes) return;
+        // Saving over the profile being edited is the normal case; any other existing name is a rename onto it.
+        if(File.Exists(path) && !string.Equals(p,loadedProfile,StringComparison.OrdinalIgnoreCase)
+            && MessageBox.Show("동일한 이름의 프로필을 덮어쓸까요?","확인",MessageBoxButtons.YesNo)!=DialogResult.Yes) return;
         try
         {
             var data=new Snapshot{SchemaVersion=3,Name=p,DesktopCount=Native.GetDesktopCount(),Windows=picked};
             File.WriteAllText(path,JsonSerializer.Serialize(data,new JsonSerializerOptions{WriteIndented=true}),new UTF8Encoding(false));
-            RefreshProfiles(); profiles.SelectedItem=p;
+            loadedProfile=p; editorDirty=false;
+            RefreshProfiles(); UpdateEditorHeader();
             foreach(var w in picked) projectCache.Remember(PluginIdOf(w),w.ProjectPath);
             SaveProjectCache();
             Write($"프로필 '{p}' 저장: 창 {picked.Count}개. 경로: {path}");
@@ -526,11 +738,9 @@ public sealed class MainForm : Form
     private async Task RestoreProfile()
     {
         if(profiles.SelectedItem is not string p) {MessageBox.Show("복원할 프로필을 선택하세요.");return;}
-        Snapshot? data;
-        try { data=JsonSerializer.Deserialize<Snapshot>(File.ReadAllText(ProfilePath(p),Encoding.UTF8)); }
-        catch(Exception ex) {Write("읽기 실패: "+ex.Message);return;}
-        if(data==null || (data.SchemaVersion!=1 && data.SchemaVersion!=2 && data.SchemaVersion!=3) || data.Windows==null) {Write("지원하지 않는 프로필 형식.");return;}
-        if(MessageBox.Show($"'{p}'의 {data.Windows.Count}개 창을 복원합니다.\n기존 프로그램은 종료하지 않습니다. 새 프로그램이 실행될 수 있습니다.\n계속할까요?","복원 확인",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+        if(ReadProfile(p) is not {} data) return;
+        string unsaved=editorDirty ? "\n\n편집 중인 저장 안 된 변경은 반영되지 않습니다. (저장된 파일 기준으로 복원)" : "";
+        if(MessageBox.Show($"'{p}'의 {data.Windows.Count}개 창을 복원합니다.\n기존 프로그램은 종료하지 않습니다. 새 프로그램이 실행될 수 있습니다.{unsaved}\n계속할까요?","복원 확인",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
         restore.Enabled=false;
         try {await DoRestore(data);}
         finally {restore.Enabled=true;}

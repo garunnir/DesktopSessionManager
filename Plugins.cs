@@ -24,6 +24,7 @@ internal sealed class PluginCatalog
 {
     public string Folder { get; } = Path.Combine(AppContext.BaseDirectory, "plugins");
     private readonly Dictionary<string, AppPlugin> entries = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> files = new(StringComparer.OrdinalIgnoreCase); // ID → JSON file it was loaded from
     public IReadOnlyCollection<AppPlugin> All => entries.Values.OrderBy(x=>x.Name).ToList();
     public PluginCatalog() { Directory.CreateDirectory(Folder); Reload(); }
     public static string Validate(AppPlugin p)
@@ -43,29 +44,37 @@ internal sealed class PluginCatalog
     }
     public List<string> Reload()
     {
-        entries.Clear(); List<string> errors=[];
+        entries.Clear(); files.Clear(); List<string> errors=[];
         foreach (var file in Directory.GetFiles(Folder, "*.json").OrderBy(x=>x))
         {
             try
             {
-                var p=JsonSerializer.Deserialize<AppPlugin>(File.ReadAllText(file,Encoding.UTF8),new JsonSerializerOptions{PropertyNameCaseInsensitive=true});
-                if(p==null) throw new InvalidDataException("빈 설정");
-                var issue=Validate(p); if(issue!="") throw new InvalidDataException(issue);
+                var p=Parse(File.ReadAllText(file,Encoding.UTF8));
                 if(entries.ContainsKey(p.Id)) throw new InvalidDataException("중복 ID: "+p.Id);
-                entries.Add(p.Id,p);
+                entries.Add(p.Id,p); files.Add(p.Id,file);
             }
             catch(Exception ex) { errors.Add($"{Path.GetFileName(file)}: {ex.Message}"); }
         }
         return errors;
     }
+    // Throws InvalidDataException (or JsonException) with a user-facing reason when the JSON is not a valid plugin.
+    public static AppPlugin Parse(string json)
+    {
+        var p=JsonSerializer.Deserialize<AppPlugin>(json,new JsonSerializerOptions{PropertyNameCaseInsensitive=true});
+        if(p==null) throw new InvalidDataException("빈 설정");
+        var issue=Validate(p); if(issue!="") throw new InvalidDataException(issue);
+        return p;
+    }
     public AppPlugin? ById(string id) => entries.GetValueOrDefault(id);
+    public string? FileOf(string id) => files.GetValueOrDefault(id);
     public AppPlugin? ForExe(string path) => All.FirstOrDefault(p=>p.ExecutableNames.Any(n=>n.Equals(Path.GetFileName(path),StringComparison.OrdinalIgnoreCase)));
     public void Save(AppPlugin p, string originalId)
     {
         var issue=Validate(p); if(issue!="") throw new InvalidDataException(issue);
         if (!string.Equals(originalId,p.Id,StringComparison.OrdinalIgnoreCase) && File.Exists(Path.Combine(Folder,p.Id+".json")))
             throw new IOException("다른 플러그인이 해당 ID를 사용 중입니다.");
-        string path=Path.Combine(Folder,p.Id+".json");
+        // Overwrite the file the plugin came from so a differently named file does not become a duplicate ID.
+        string path=string.Equals(originalId,p.Id,StringComparison.OrdinalIgnoreCase) && FileOf(p.Id) is {} existing ? existing : Path.Combine(Folder,p.Id+".json");
         File.WriteAllText(path,JsonSerializer.Serialize(p,new JsonSerializerOptions{WriteIndented=true}),new UTF8Encoding(false));
         if(!string.IsNullOrEmpty(originalId) && !originalId.Equals(p.Id,StringComparison.OrdinalIgnoreCase))
         {
