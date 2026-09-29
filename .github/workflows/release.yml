@@ -72,6 +72,20 @@ jobs:
           $dir = "$env:RUNNER_TEMP/release"
           $title = "Desktop Session Manager $env:TAG"
           if ($env:GITHUB_EVENT_NAME -ne 'push') { $title += ' (VirtualDesktopAccessor 업데이트)' }
-          gh release create $env:TAG "$dir/DesktopSessionManager-$env:VERSION-win-x64.zip" `
-            --target $env:TARGET --title $title --notes-file "$dir/release-notes.md" --generate-notes
+          $asset = "$dir/DesktopSessionManager-$env:VERSION-win-x64.zip"
+          $releaseArgs = @(
+            $env:TAG
+            $asset
+            '--title', $title
+            '--notes-file', "$dir/release-notes.md"
+            '--generate-notes'
+          )
+          if ($env:GITHUB_EVENT_NAME -eq 'push') {
+            # 태그 push에서는 이미 존재하는 태그를 사용합니다. --target을 넘기면
+            # 기본 브랜치와 workflow 파일이 다를 때 workflows:write 권한이 요구됩니다.
+            gh release create @releaseArgs --verify-tag
+          } else {
+            # VDA 업데이트 PR 병합 시에는 새 패치 태그도 함께 만듭니다.
+            gh release create @releaseArgs --target $env:TARGET
+          }
           if ($LASTEXITCODE -ne 0) { throw 'gh release create 실패' }
