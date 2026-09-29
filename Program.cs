@@ -31,6 +31,7 @@ public sealed class SavedWindow
     public bool Maximized { get; set; }
     public bool Minimized { get; set; }
     public bool Pinned { get; set; }
+    public bool AllDesktops { get; set; } // HUD/overlay with no virtual desktop of its own
     public string ProjectPath { get; set; } = ""; // VS Code folder/.code-workspace or Unity project root
     public string ProjectKind { get; set; } = ""; // legacy v2 compatibility
     public string PluginId { get; set; } = ""; // data-driven v3 extension ID
@@ -56,6 +57,9 @@ internal static class Native
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetShellWindow();
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out int value, int size);
+    public static bool IsCloaked(IntPtr h) => DwmGetWindowAttribute(h,14,out int c,sizeof(int))==0 && c!=0; // DWMWA_CLOAKED
     [DllImport("user32.dll")] public static extern int GetWindowTextLengthW(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr hWnd, StringBuilder text, int count);
     [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint cmd);
@@ -141,9 +145,11 @@ internal static class Scanner
         {
             try
             {
-                if (!Native.IsWindowVisible(h) || Native.GetWindow(h,4) != IntPtr.Zero) return true; // GW_OWNER
+                if (!Native.IsWindowVisible(h)) return true;
                 long style = Native.GetWindowLongPtr(h,-20).ToInt64(); // GWL_EXSTYLE
-                if ((style & 0x80) != 0 || (style & 0x00080000) != 0) return true; // TOOLWINDOW / NOACTIVATE
+                IntPtr owner = Native.GetWindow(h,4); // GW_OWNER
+                // Dialogs have a visible owner and stay excluded; HUDs often hang off a hidden one.
+                if (owner != IntPtr.Zero && (!WindowFilters.Includes(WindowFilter.HiddenOwner) || Native.IsWindowVisible(owner))) return true;
                 int len = Native.GetWindowTextLengthW(h);
                 if (len == 0) return true;
                 var title=new StringBuilder(len+1); Native.GetWindowTextW(h,title,title.Capacity);
@@ -151,8 +157,13 @@ internal static class Scanner
                 if (pid == (uint)Environment.ProcessId) return true;
                 string path=Native.GetPath(pid);
                 if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return true;
+                if (!WindowFilters.AllowsStyle(style)) return true;
                 int desktop=Native.GetWindowDesktopNumber(h);
-                if (desktop < 0) return true;
+                bool allDesktops = desktop < 0;
+                if (allDesktops && !WindowFilters.Includes(WindowFilter.NoDesktop)) return true;
+                // Most desktop-less windows are the shell or Windows' own (often cloaked) UI.
+                if (allDesktops && !WindowFilters.Includes(WindowFilter.SystemWindows) && (h == Native.GetShellWindow() || Native.IsCloaked(h)
+                    || path.StartsWith(Environment.GetFolderPath(Environment.SpecialFolder.Windows)+"\\",StringComparison.OrdinalIgnoreCase))) return true;
                 var wp=Native.WINDOWPLACEMENT.Init();
                 if (!Native.GetWindowPlacement(h,ref wp)) return true;
                 var r=wp.rcNormalPosition;
@@ -163,7 +174,7 @@ internal static class Scanner
                     DesktopName=Native.GetDesktopLabel(desktop), Left=r.Left, Top=r.Top,
                     Width=r.Right-r.Left, Height=r.Bottom-r.Top,
                     Maximized=wp.showCmd==3, Minimized=wp.showCmd is 2 or 6 or 7,
-                    Pinned=Native.IsPinnedWindow(h)==1
+                    Pinned=!allDesktops && Native.IsPinnedWindow(h)==1, AllDesktops=allDesktops
                 };
                 found.Add(new LiveWindow{Handle=h,ProcessId=pid,Data=data});
             }
@@ -246,6 +257,7 @@ public sealed class MainForm : Form
         layout.Controls.Add(split,0,0);
         layout.Controls.Add(new Label{Text="플러그인(JSON) 설정은 재빌드 없이 새로고침 가능합니다. 프로젝트 경로는 창을 선택해 지정하며 미저장 변경사항은 복원하지 않습니다.",Dock=DockStyle.Fill,Padding=new Padding(8,4,0,0)},0,1);
         layout.Controls.Add(log,0,2);
+        WindowFilters.Load(Path.Combine(DataRoot,"window-filters.txt"));
         var menu=BuildMenu();
         Controls.Add(layout); Controls.Add(menu); MainMenuStrip=menu;
         scan.Click+=(_,_)=>RefreshWindows(); setProject.Click+=(_,_)=>SetProject(); addChecked.Click+=(_,_)=>AddChecked();
@@ -408,7 +420,7 @@ public sealed class MainForm : Form
             var dx=((LiveWindow)x.Tag!).Data; var dy=((LiveWindow)y.Tag!).Data;
             int r=column switch
             {
-                2=>(dx.Pinned?int.MaxValue:dx.DesktopIndex).CompareTo(dy.Pinned?int.MaxValue:dy.DesktopIndex), // pinned last
+                2=>(dx.Pinned||dx.AllDesktops?int.MaxValue:dx.DesktopIndex).CompareTo(dy.Pinned||dy.AllDesktops?int.MaxValue:dy.DesktopIndex), // pinned last
                 3=>dx.Left!=dy.Left ? dx.Left.CompareTo(dy.Left) : dx.Top.CompareTo(dy.Top),
                 _=>string.Compare(x.SubItems[column].Text,y.SubItems[column].Text,StringComparison.CurrentCultureIgnoreCase)
             };
@@ -422,7 +434,7 @@ public sealed class MainForm : Form
     private bool MissingProject(SavedWindow d) => d.ProjectPath=="" && pluginsCatalog.ForExe(d.Path) is {OpensFiles:false};
     private static string FilesLabel(List<string> files) =>
         $"파일 {files.Count}개: "+string.Join(", ",files.Select(x=>Path.GetFileName(x)));
-    private static string DesktopLabel(SavedWindow d) => $"{d.DesktopIndex+1}: {d.DesktopName}" + (d.Pinned?" [고정]":"");
+    private static string DesktopLabel(SavedWindow d) => d.AllDesktops ? "모든 데스크톱" : $"{d.DesktopIndex+1}: {d.DesktopName}" + (d.Pinned?" [고정]":"");
     private static string RectLabel(SavedWindow d) => $"{d.Left},{d.Top} / {d.Width}×{d.Height}";
     private string ProjectLabel(SavedWindow d) =>
         MissingProject(d) ? UnassignedProject : d.OpenFiles.Count>0 ? FilesLabel(d.OpenFiles) : d.ProjectPath;
@@ -488,8 +500,18 @@ public sealed class MainForm : Form
         plugins.DropDownItems.AddRange([
             Item("확장 기능 관리...",ManagePlugins),
             Item("확장 새로고침",ReloadPlugins)]);
+        var view=new ToolStripMenuItem("보기(&V)");
+        view.DropDownItems.Add(new ToolStripLabel("창 목록에 포함"){ForeColor=System.Drawing.SystemColors.GrayText});
+        foreach(var (filter,label) in WindowFilters.Toggles)
+        {
+            var toggle=new ToolStripMenuItem(label){CheckOnClick=true,Checked=WindowFilters.Includes(filter)};
+            toggle.CheckedChanged+=(_,_)=>{WindowFilters.Set(filter,toggle.Checked);if(apiReady)RefreshWindows();};
+            view.DropDownItems.Add(toggle);
+        }
+        // Keep the menu open so several filters can be toggled in a row.
+        view.DropDown.Closing+=(_,e)=>{if(e.CloseReason==ToolStripDropDownCloseReason.ItemClicked)e.Cancel=true;};
         var menu=new MenuStrip{Dock=DockStyle.Top};
-        menu.Items.AddRange([file,plugins]);
+        menu.Items.AddRange([file,view,plugins]);
         return menu;
     }
     private static void OpenFolder(string path)
@@ -748,7 +770,7 @@ public sealed class MainForm : Form
     private async Task DoRestore(Snapshot data)
     {
         int count=Native.GetDesktopCount();
-        int required=data.Windows.Where(w=>!w.Pinned).Select(w=>w.DesktopIndex).DefaultIfEmpty(0).Max()+1;
+        int required=data.Windows.Where(w=>!w.Pinned && !w.AllDesktops).Select(w=>w.DesktopIndex).DefaultIfEmpty(0).Max()+1;
         if(required>count && createDesktops.Checked)
         {
             // Limit unexpected desktop creation even when loading a manually edited file.
@@ -764,7 +786,7 @@ public sealed class MainForm : Form
         foreach(var target in data.Windows)
         {
             if(target.Pinned) {Write($"고정 창 제외: {target.Title}");continue;}
-            if(target.DesktopIndex>=count || target.DesktopIndex<0) {Write($"데스크톱 {target.DesktopIndex+1} 없음: {target.Title}");failed++;continue;}
+            if(!target.AllDesktops && (target.DesktopIndex>=count || target.DesktopIndex<0)) {Write($"데스크톱 {target.DesktopIndex+1} 없음: {target.Title}");failed++;continue;}
             if(!File.Exists(target.Path)) {Write($"실행 파일 없음: {target.Path}");failed++;continue;}
             string pluginId=PluginIdOf(target);
             AppPlugin? plugin=pluginId=="" ? null : pluginsCatalog.ById(pluginId);
@@ -824,7 +846,7 @@ public sealed class MainForm : Form
             reserved.Add(candidate.Handle);
             try
             {
-                int move=Native.MoveWindowToDesktopNumber(candidate.Handle,target.DesktopIndex);
+                int move=target.AllDesktops ? 0 : Native.MoveWindowToDesktopNumber(candidate.Handle,target.DesktopIndex);
                 if(move==-1) {Write($"데스크톱 이동 실패: {target.Title}");failed++;continue;}
                 // Normal rect is persisted independently of the window's current maximized state.
                 var wp=Native.WINDOWPLACEMENT.Init();
@@ -833,7 +855,7 @@ public sealed class MainForm : Form
                 wp.rcNormalPosition=new Native.RECT{Left=rect.Left,Top=rect.Top,Right=rect.Right,Bottom=rect.Bottom};
                 wp.showCmd=target.Maximized?3:target.Minimized?2:1;
                 if(!Native.SetWindowPlacement(candidate.Handle,ref wp)) {Write($"위치 복원 실패: {target.Title}");failed++;continue;}
-                ok++; Write($"완료: {target.Title} → 데스크톱 {target.DesktopIndex+1}");
+                ok++; Write($"완료: {target.Title} → " + (target.AllDesktops ? "모든 데스크톱" : $"데스크톱 {target.DesktopIndex+1}"));
             }
             catch(Exception ex){failed++;Write($"복원 오류 {target.Title}: {ex.Message}");}
         }
