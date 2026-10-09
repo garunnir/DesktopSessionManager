@@ -73,7 +73,8 @@ $($rows -join "`n")
 플러그인 설정이 EXE 옆 ``plugins/``에 저장되므로 ``C:\Program Files``처럼 쓰기 권한이 없는 곳은 피하세요.
 서명되지 않은 EXE라 처음 실행할 때 SmartScreen 경고가 뜨면 [추가 정보] → [실행]을 누르세요.
 
-업데이트할 때는 새 zip을 풀고 기존 ``plugins/``의 수정한 설정만 옮기면 됩니다. 프로필은 ``%LOCALAPPDATA%\DesktopSessionManager``에 있어 그대로 유지됩니다.
+이전 버전을 쓰고 있다면 앱이 시작할 때 업데이트를 묻고, 수락하면 자동으로 설치하고 다시 시작합니다 (v0.3.0 이하는 수동 업데이트).
+수동으로 할 때는 새 zip을 풀고 기존 ``plugins/``의 수정한 설정만 옮기면 됩니다. 프로필은 ``%LOCALAPPDATA%\DesktopSessionManager``에 있어 그대로 유지됩니다.
 
 SHA256 (``$name.zip``): ``$sha``
 "@

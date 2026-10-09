@@ -13,6 +13,7 @@ internal static class Program
     private static void Main()
     {
         ApplicationConfiguration.Initialize();
+        Updates.CleanupOldFiles();
         Vda.Initialize();
         Application.Run(new MainForm());
     }
@@ -222,6 +223,10 @@ public sealed class MainForm : Form
     private string? loadedProfile;
     private bool editorDirty, suppressProfileLoad;
     private readonly LinkLabel updateLink = new() { AutoSize=true, Visible=false, Margin=new Padding(12,7,3,0) };
+    private Updates.Release? latest;
+    private bool updating;
+    // Version the user declined at the startup prompt; they are not asked again for it.
+    private static readonly string UpdateSkipFile=Path.Combine(DataRoot,"update-skip.txt");
 
     public MainForm()
     {
@@ -291,30 +296,84 @@ public sealed class MainForm : Form
         }
         scan.Enabled=saveProfile.Enabled=restore.Enabled=addChecked.Enabled=apiReady;
         if(apiReady) RefreshWindows();
-        updateLink.LinkClicked+=(_,_)=>OpenUrl((string)updateLink.Tag!);
-        Shown+=async (_,_)=>await CheckForUpdate();
+        updateLink.LinkClicked+=async (_,_)=>{if(latest!=null) await InstallUpdate(latest);};
+        Shown+=async (_,_)=>await CheckForUpdate(false);
     }
-    private async Task CheckForUpdate()
+    // At startup (manual=false) failures only go to the log and a declined version is not offered again.
+    private async Task CheckForUpdate(bool manual)
     {
-        if(!Updates.Enabled) {if(!Vda.Loaded) Write("최신 버전: "+Updates.ReleasesUrl); return;}
-        (Version Version,string Url)? latest;
+        if(!Updates.Enabled)
+        {
+            if(manual) MessageBox.Show(this,"개발 빌드(0.0.0)는 업데이트를 확인하지 않습니다.","업데이트");
+            else if(!Vda.Loaded) Write("최신 버전: "+Updates.ReleasesUrl);
+            return;
+        }
         try {latest=await Updates.CheckAsync();}
         catch(Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException)
         {
             Write("업데이트 확인 실패: "+ex.Message);
             if(!Vda.Loaded) Write("최신 버전: "+Updates.ReleasesUrl);
+            if(manual) MessageBox.Show(this,"업데이트 확인 실패: "+ex.Message,"업데이트",MessageBoxButtons.OK,MessageBoxIcon.Warning);
             return;
         }
         if(latest==null)
         {
             if(!Vda.Loaded) Write("최신 버전도 이 Windows 빌드를 지원하지 않습니다. VirtualDesktopAccessor 새 릴리즈 이후 업데이트가 나옵니다.");
+            if(manual) MessageBox.Show(this,$"최신 버전(v{Updates.Current})을 사용 중입니다.","업데이트");
             return;
         }
-        var (version,url)=latest.Value;
-        Write($"새 버전 v{version}: {url}");
-        updateLink.Text=$"새 버전 v{version} 다운로드"; updateLink.Tag=url; updateLink.Visible=true;
-        if(!Vda.Loaded && MessageBox.Show(this,$"이 Windows 빌드용 VirtualDesktopAccessor가 없습니다.\n새 버전 v{version}에서 지원될 수 있습니다. 다운로드 페이지를 열까요?",
-            "Desktop Session Manager",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)==DialogResult.Yes) OpenUrl(url);
+        var version=latest.Version;
+        Write($"새 버전 v{version}: {latest.PageUrl}");
+        updateLink.Text=$"새 버전 v{version} 설치"; updateLink.Visible=true;
+        if(!manual && Vda.Loaded && ReadSkippedVersion()==version) return;
+        string question=!Vda.Loaded
+            ? $"이 Windows 빌드용 VirtualDesktopAccessor가 없습니다.\n새 버전 v{version}에서 지원될 수 있습니다. 지금 업데이트할까요?"
+            : $"새 버전 v{version}이(가) 있습니다. (현재 v{Updates.Current})\n지금 업데이트하고 다시 시작할까요?";
+        if(MessageBox.Show(this,question,"Desktop Session Manager",MessageBoxButtons.YesNo,Vda.Loaded?MessageBoxIcon.Information:MessageBoxIcon.Warning)==DialogResult.Yes)
+            await InstallUpdate(latest);
+        else if(!manual) SaveSkippedVersion(version);
+    }
+    private async Task InstallUpdate(Updates.Release release)
+    {
+        if(updating) return;
+        if(Updates.CannotInstallReason(release) is {} reason)
+        {
+            Write($"자동 업데이트 불가: {reason}. 다운로드 페이지를 엽니다.");
+            OpenUrl(release.PageUrl);
+            return;
+        }
+        updating=true; updateLink.Enabled=false;
+        try
+        {
+            Write($"v{release.Version} 다운로드 중...");
+            string files=await Updates.DownloadAsync(release);
+            Write("SHA256 확인 완료.");
+            if(!ConfirmDiscard()) {Write("업데이트 취소. 메뉴의 [도움말] → [업데이트 확인]으로 다시 설치할 수 있습니다.");return;}
+            Updates.Apply(files);
+        }
+        catch(Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Write("업데이트 실패: "+ex.Message);
+            if(MessageBox.Show(this,$"업데이트 실패: {ex.Message}\n다운로드 페이지를 열까요?","업데이트",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)==DialogResult.Yes)
+                OpenUrl(release.PageUrl);
+            return;
+        }
+        finally {updating=false; updateLink.Enabled=true;}
+        Write($"v{release.Version} 설치 완료. 다시 시작합니다.");
+        Process.Start(new ProcessStartInfo(Updates.ExePath){UseShellExecute=false,WorkingDirectory=Path.GetDirectoryName(Updates.ExePath)!});
+        // Unsaved edits were already confirmed above.
+        editorDirty=false;
+        Close();
+    }
+    private static Version? ReadSkippedVersion()
+    {
+        try {return File.Exists(UpdateSkipFile) && Version.TryParse(File.ReadAllText(UpdateSkipFile).Trim(),out var v) ? v : null;}
+        catch(Exception ex) when (ex is IOException or UnauthorizedAccessException) {return null;}
+    }
+    private void SaveSkippedVersion(Version v)
+    {
+        try {Directory.CreateDirectory(DataRoot); File.WriteAllText(UpdateSkipFile,v.ToString());}
+        catch(Exception ex) when (ex is IOException or UnauthorizedAccessException) {Write("업데이트 설정 저장 실패: "+ex.Message);}
     }
     private static void OpenUrl(string url) => Process.Start(new ProcessStartInfo(url){UseShellExecute=true});
     private void Write(string s) => log.AppendText($"[{DateTime.Now:HH:mm:ss}] {s}{Environment.NewLine}");
@@ -510,8 +569,12 @@ public sealed class MainForm : Form
         }
         // Keep the menu open so several filters can be toggled in a row.
         view.DropDown.Closing+=(_,e)=>{if(e.CloseReason==ToolStripDropDownCloseReason.ItemClicked)e.Cancel=true;};
+        var help=new ToolStripMenuItem("도움말(&H)");
+        help.DropDownItems.AddRange([
+            Item("업데이트 확인",async ()=>await CheckForUpdate(true)),
+            Item("릴리즈 페이지 열기",()=>OpenUrl(Updates.ReleasesUrl))]);
         var menu=new MenuStrip{Dock=DockStyle.Top};
-        menu.Items.AddRange([file,view,plugins]);
+        menu.Items.AddRange([file,view,plugins,help]);
         return menu;
     }
     private static void OpenFolder(string path)

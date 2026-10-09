@@ -9,7 +9,8 @@ LLM으로 만든 내 작업환경 저장/로드 프로그램
   - VDA는 Windows 빌드마다 전용 DLL이 필요합니다. 여러 릴리즈를 `vda/<릴리즈>/`에 함께 배포하고,
     실행할 때 Windows 빌드와 UBR을 확인해 맞는 DLL 하나만 SHA256 확인 후 로드합니다. 맞는 DLL이 없으면 아무것도 로드하지 않습니다.
   - 릴리즈와 지원 빌드 표는 `DesktopSessionManager.csproj`의 `VdaRelease` 항목입니다. 빌드 시 공식 릴리즈에서 내려받고 SHA256을 확인합니다.
-  - 새 릴리즈는 `.github/workflows/update-vda.yml`이 매주 감지·검증해 PR을 엽니다 (로컬: `scripts/update-vda.ps1`).
+  - 새 릴리즈는 `.github/workflows/update-vda.yml`이 매일 감지·검증해 PR을 열고 저장소 소유자를 담당자로 지정합니다 (로컬: `scripts/update-vda.ps1`).
+    PR을 머지하면 패치 버전이 자동 릴리즈되고, 앱은 다음 실행 때 그 버전으로 업데이트합니다. 외부 DLL이므로 머지는 사람이 확인합니다.
   - 릴리즈별 해시와 라이선스 전문은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 있습니다.
 
 ## 빌드
@@ -21,7 +22,12 @@ LLM으로 만든 내 작업환경 저장/로드 프로그램
 
 - `v1.2.3` 형식의 태그를 push하면 `.github/workflows/release.yml`이 VDA 테이블 검증 → 패키징 → GitHub Release(zip, 지원 Windows 표, SHA256)를 만듭니다.
 - VirtualDesktopAccessor 업데이트 PR을 머지하면 패치 버전을 올려 자동으로 릴리즈합니다.
-- 앱은 시작할 때 GitHub의 최신 릴리즈를 확인해 새 버전 링크를 보여 줍니다. 실행 중인 Windows용 DLL이 없으면 다운로드 페이지를 열지 묻습니다.
+- 앱은 시작할 때 GitHub의 최신 릴리즈를 확인하고, 새 버전이 있으면 업데이트할지 묻습니다 (**도움말 → 업데이트 확인**으로 직접 확인할 수도 있습니다).
+  - 수락하면 zip을 내려받아 SHA256(릴리즈 에셋 digest, 없으면 릴리즈 노트)을 확인한 뒤 EXE 폴더의 파일을 교체하고 다시 시작합니다.
+    실행 중인 EXE·DLL은 `*.update-old`로 이름을 바꿔 두고 다음 실행 때 지웁니다. 복사 중 실패하면 원래 파일로 되돌립니다.
+  - `plugins/`는 없는 파일만 추가합니다. 수정한 설정이나 `.disabled`로 꺼 둔 플러그인은 그대로 둡니다.
+  - 거절한 버전은 다음 시작 때 다시 묻지 않습니다 (상단 링크나 메뉴로 설치 가능). 실행 중인 Windows용 DLL이 없으면 매번 묻습니다.
+  - EXE 폴더에 쓸 수 없으면(예: `C:\Program Files`) 다운로드 페이지를 엽니다.
 
 ## 개발 중 실행
 

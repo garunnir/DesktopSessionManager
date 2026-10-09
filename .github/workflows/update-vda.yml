@@ -2,7 +2,7 @@ name: Update VirtualDesktopAccessor
 
 on:
   schedule:
-    - cron: '0 0 * * 1' # 매주 월요일 09:00 KST
+    - cron: '0 0 * * *' # 매일 09:00 KST
   workflow_dispatch:
     inputs:
       tag:
@@ -50,6 +50,8 @@ jobs:
           body-path: ${{ steps.vda.outputs.notes_path }}
           draft: ${{ steps.vda.outputs.needs_review == 'true' }}
           labels: dependencies
+          # 담당자로 지정되면 GitHub 알림이 옵니다. 머지하면 release.yml이 패치 릴리즈를 만들고 앱이 자동 업데이트합니다.
+          assignees: ${{ github.repository_owner }}
           add-paths: |
             DesktopSessionManager.csproj
             THIRD_PARTY_NOTICES.md
