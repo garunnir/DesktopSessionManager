@@ -11,6 +11,11 @@ LLM으로 만든 내 작업환경 저장/로드 프로그램
   - 릴리즈와 지원 빌드 표는 `DesktopSessionManager.csproj`의 `VdaRelease` 항목입니다. 빌드 시 공식 릴리즈에서 내려받고 SHA256을 확인합니다.
   - 새 릴리즈는 `.github/workflows/update-vda.yml`이 매일 감지·검증해 PR을 열고 저장소 소유자를 담당자로 지정합니다 (로컬: `scripts/update-vda.ps1`).
     PR을 머지하면 패치 버전이 자동 릴리즈되고, 앱은 다음 실행 때 그 버전으로 업데이트합니다. 외부 DLL이므로 머지는 사람이 확인합니다.
+  - Windows 업데이트로 표에 없는 빌드가 되면 앱이 직접 호환 DLL을 찾습니다.
+    1. 동봉한 가장 최신 DLL을 별도 프로세스(`--probe-vda`)에서 시험합니다: 필요한 export, 데스크톱 수, 현재 데스크톱, 보이는 창의 데스크톱 번호가 앞뒤가 맞는지.
+    2. 실패하면 VirtualDesktopAccessor의 표에 없는 새 릴리즈를 GitHub가 기록한 SHA256이 있는 것만 내려받아(`%LOCALAPPDATA%\DesktopSessionManager\vda\`) 같은 방식으로 시험합니다.
+    3. 통과한 DLL은 빌드·UBR별로 `vda-verified.json`에 SHA256과 함께 기록하고 다음 실행부터 바로 씁니다. 모두 실패하면 24시간 뒤 다시 확인합니다.
+    로그에 지원 표에 넣을 항목(`VdaBuildAlias` 또는 `update-vda.ps1 -Tag`)을 알려 주므로, 확인 후 표에 추가해 릴리즈하면 다른 사용자에게도 적용됩니다.
   - 릴리즈별 해시와 라이선스 전문은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 있습니다.
 
 ## 빌드

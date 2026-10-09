@@ -10,11 +10,12 @@ namespace DesktopSessionManager;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        if(args.Length==2 && args[0]==Vda.ProbeArg) {Environment.Exit(Vda.RunProbe(args[1])); return;}
         ApplicationConfiguration.Initialize();
         Updates.CleanupOldFiles();
-        Vda.Initialize();
+        Vda.Initialize(MainForm.DataRoot);
         Application.Run(new MainForm());
     }
 }
@@ -210,7 +211,7 @@ public sealed class MainForm : Form
 #else
     private const string AppDataName="DesktopSessionManager";
 #endif
-    private static readonly string DataRoot=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),AppDataName);
+    internal static readonly string DataRoot=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),AppDataName);
     private readonly string folder=Path.Combine(DataRoot,"Profiles");
     private readonly ProjectCache projectCache=new(Path.Combine(DataRoot,"project-cache.json"));
     private bool apiReady;

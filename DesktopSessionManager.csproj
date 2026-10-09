@@ -32,6 +32,7 @@
     <!-- Enablement-package builds that share code and UBR with a base build. -->
     <VdaBuildAlias Include="22631" Base="22621" />
     <VdaBuildAlias Include="26200" Base="26100" />
+    <VdaBuildAlias Include="26300" Base="26100" />
   </ItemGroup>
 
   <Target Name="FetchVirtualDesktopAccessor" BeforeTargets="AssignTargetPaths" Outputs="%(VdaRelease.Identity)">
@@ -59,6 +60,11 @@
       <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
         <_Parameter1>VdaBuildAlias</_Parameter1>
         <_Parameter2>%(VdaBuildAlias.Identity)|%(VdaBuildAlias.Base)</_Parameter2>
+      </AssemblyAttribute>
+      <!-- The app's automatic check for newer VDA releases skips these too. -->
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>VdaIgnoredRelease</_Parameter1>
+        <_Parameter2>%(VdaIgnoredRelease.Identity)</_Parameter2>
       </AssemblyAttribute>
     </ItemGroup>
   </Target>
