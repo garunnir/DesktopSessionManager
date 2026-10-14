@@ -25,7 +25,7 @@ local function update()
     if app.fs.isFile(sprite.filename) then table.insert(names, sprite.filename) end
   end
   local text = table.concat(names, "\n")
-  if text ~= last and save(text) then last = text end
+  if save(text) then last = text end
 end
 
 function init(plugin)

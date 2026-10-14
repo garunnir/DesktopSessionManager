@@ -175,6 +175,8 @@ internal sealed class ProjectDetector(ProjectCache cache)
         try
         {
             if (!File.Exists(file)) return null;
+            // A bridge without a recent event is unverified, even if this process is still alive.
+            if (DateTime.UtcNow - File.GetLastWriteTimeUtc(file) > TimeSpan.FromMinutes(5)) return null;
             // A list older than the process was left by an earlier run: the bridge is not loaded now.
             using var process = Process.GetProcessById((int)w.ProcessId);
             if (File.GetLastWriteTime(file) < process.StartTime) return null;
@@ -282,7 +284,7 @@ internal sealed class ProjectDetector(ProjectCache cache)
                         {
                             if (prop.Value.ValueKind == JsonValueKind.String && prop.Name is "folderUri" or "folder" or "configPath"
                                 && Uri.TryCreate(prop.Value.GetString(), UriKind.Absolute, out var uri) && uri.IsFile)
-                                opened.Add(Path.TrimEndingDirectorySeparator(uri.LocalPath));
+                                opened.Add(VsCodeFilePath(uri));
                             else Collect(prop.Value);
                         }
                     else if (e.ValueKind == JsonValueKind.Array)
@@ -305,6 +307,17 @@ internal sealed class ProjectDetector(ProjectCache cache)
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { }
         return new VsCodeState(opened.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), separator);
+    }
+
+    // VS Code encodes drive colons (file:///z%3A/...). Uri.LocalPath then retains
+    // a leading slash, which Windows treats as a different, invalid path.
+    internal static string VsCodeFilePath(Uri uri)
+    {
+        string path = uri.LocalPath;
+        if (uri.IsLoopback && path.Length >= 4 && path[0] is '/' or '\\'
+            && char.IsAsciiLetter(path[1]) && path[2] == ':' && path[3] is '/' or '\\')
+            path = path[1..];
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
     }
 }
 

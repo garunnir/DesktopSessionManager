@@ -71,6 +71,8 @@
 
   <!-- Copied beside the EXE so `dotnet run` works; build.cmd places plugins in dist for publish. -->
   <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
+    <InternalsVisibleTo Include="DesktopSessionManager.Tests" />
     <None Include="plugins\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
   </ItemGroup>
 </Project>

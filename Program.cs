@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -22,6 +22,7 @@ internal static class Program
 
 public sealed class SavedWindow
 {
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Path { get; set; } = "";
     public string Title { get; set; } = "";
     public int DesktopIndex { get; set; }
@@ -46,6 +47,7 @@ public sealed class Snapshot
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.Now;
     public int DesktopCount { get; set; }
     public List<SavedWindow> Windows { get; set; } = [];
+    public List<MonitorLayout> Layouts { get; set; } = [];
 }
 internal sealed class LiveWindow
 {
@@ -187,7 +189,7 @@ internal static class Scanner
     }
 }
 
-public sealed class MainForm : Form
+public sealed partial class MainForm : Form
 {
     private readonly ListView windows = new() { Dock=DockStyle.Fill, View=View.Details, CheckBoxes=true, FullRowSelect=true, GridLines=true };
     private readonly ComboBox profiles = new() { DropDownStyle=ComboBoxStyle.DropDownList, Width=225 };
@@ -198,7 +200,7 @@ public sealed class MainForm : Form
     private readonly Button setProject = new() { Text="선택 창 프로젝트 지정", Width=160 };
     private readonly TextBox find = new() { Width=260, PlaceholderText="찾기 (Ctrl+F) — 프로그램·제목·경로" };
     private readonly Label checkCount = new() { AutoSize=true, Margin=new Padding(8,7,3,0) };
-    private static readonly string[] ColumnNames=["프로그램","창 제목","데스크톱","창 위치/크기","프로젝트 경로","EXE 경로"];
+    private static readonly string[] ColumnNames=["프로그램","창 제목","데스크톱","창 위치/크기","프로젝트 경로","EXE 경로","복원 연동 상태"];
     private List<LiveWindow> live=[];
     // All scanned rows; the list shows only those matching the search box.
     private List<ListViewItem> allItems=[];
@@ -238,7 +240,7 @@ public sealed class MainForm : Form
 #endif
         Width=1400; Height=760; MinimumSize=new System.Drawing.Size(1000,560); StartPosition=FormStartPosition.CenterScreen;
         Font=new System.Drawing.Font("Malgun Gothic",9);
-        int[] widths=[120,240,110,150,200,280];
+        int[] widths=[120,240,110,150,200,280,230];
         for(int i=0;i<ColumnNames.Length;i++) windows.Columns.Add(ColumnNames[i],widths[i]);
         var scan=new Button{Text="현재 창 새로고침",Width=130};
         var addChecked=new Button{Text="체크된 창 프로필에 추가 ▶",Width=190};
@@ -267,7 +269,7 @@ public sealed class MainForm : Form
         var menu=BuildMenu();
         Controls.Add(layout); Controls.Add(menu); MainMenuStrip=menu;
         scan.Click+=(_,_)=>RefreshWindows(); setProject.Click+=(_,_)=>SetProject(); addChecked.Click+=(_,_)=>AddChecked();
-        FormClosing+=(_,e)=>{if(!ConfirmDiscard()) e.Cancel=true;};
+        FormClosing+=OnClosing;
         restore.Click+=async (_,_)=>await RestoreProfile();
         checkAll.Click+=(_,_)=>SetVisibleChecked(true); uncheckAll.Click+=(_,_)=>SetVisibleChecked(false);
         find.TextChanged+=(_,_)=>ApplyFilter();
@@ -295,7 +297,9 @@ public sealed class MainForm : Form
                 Write("VirtualDesktopAccessor 함수 누락: " + ex.Message);
             }
         }
-        scan.Enabled=saveProfile.Enabled=restore.Enabled=addChecked.Enabled=apiReady;
+        scan.Enabled=restore.Enabled=addChecked.Enabled=apiReady;
+        saveProfile.Enabled=true;
+        InitializeUsability();
         if(apiReady) RefreshWindows();
         updateLink.LinkClicked+=async (_,_)=>{if(latest!=null) await InstallUpdate(latest);};
         Shown+=async (_,_)=>await CheckForUpdate(false);
@@ -364,6 +368,7 @@ public sealed class MainForm : Form
         Process.Start(new ProcessStartInfo(Updates.ExePath){UseShellExecute=false,WorkingDirectory=Path.GetDirectoryName(Updates.ExePath)!});
         // Unsaved edits were already confirmed above.
         editorDirty=false;
+        exitRequested=true;
         Close();
     }
     private static Version? ReadSkippedVersion()
@@ -404,7 +409,7 @@ public sealed class MainForm : Form
     }
     private void RefreshWindows()
     {
-        // Keep manual assignments for windows that are still open; detect the rest.
+        // Detect current projects first: VS Code can switch folders without replacing its window.
         var previous=live.Where(x=>x.Data.ProjectPath!="" || x.Data.OpenFiles.Count>0).ToDictionary(x=>x.Handle);
         live=Scanner.Scan(); windows.Items.Clear(); allItems=[]; checks.Clear();
         var detector=new ProjectDetector(projectCache); int detected=0,noBridge=0;
@@ -417,20 +422,26 @@ public sealed class MainForm : Form
             if(plugin?.OpensFiles==true && files==null) noBridge++;
             if(files!=null)
             {d.PluginId=plugin!.Id;d.OpenFiles=files;detected++;}
-            else if(previous.TryGetValue(w.Handle,out var old) && old.Data.Path==d.Path)
-            {d.PluginId=old.Data.PluginId;d.ProjectPath=old.Data.ProjectPath;d.OpenFiles=old.Data.OpenFiles;}
             else if(plugin is {OpensFiles:false} && detector.Detect(w,plugin) is {} found)
             {d.PluginId=plugin.Id;d.ProjectPath=found;detected++;}
+            // Retain manual assignments only while the same process/window title remains.
+            // If detection fails after switching projects, leave the path empty rather than stale.
+            else if(plugin?.OpensFiles!=true && previous.TryGetValue(w.Handle,out var old) && old.ProcessId==w.ProcessId
+                && old.Data.Path==d.Path && old.Data.Title==d.Title)
+            {d.PluginId=old.Data.PluginId;d.ProjectPath=old.Data.ProjectPath;d.OpenFiles=old.Data.OpenFiles;}
             var item=new ListViewItem(System.IO.Path.GetFileNameWithoutExtension(d.Path)) {Checked=!d.Pinned, Tag=w};
             item.SubItems.Add(d.Title);
             item.SubItems.Add(DesktopLabel(d));
             item.SubItems.Add(RectLabel(d)); item.SubItems.Add(d.ProjectPath); item.SubItems.Add(d.Path);
+            item.SubItems.Add(plugin==null ? "프로그램 실행만 지원" : plugin.OpensFiles
+                ? files==null ? "연결 미확인: 정보 없음 / 5분 이상 지남" : $"열린 파일 정보 수신: {files.Count}개"
+                : d.ProjectPath=="" ? "프로젝트 감지 실패: 직접 지정 필요" : "프로젝트 경로 확인됨");
             item.UseItemStyleForSubItems=false; ShowProject(item);
             allItems.Add(item); checks[item]=item.Checked;
         }
         ApplyFilter();
         Write($"일반 창 {live.Count}개 검색 (프로젝트 경로 자동 감지 {detected}개). 다른 데스크톱에 있는 최소화 창도 포함할 수 있습니다. 저장 전 목록을 확인하세요.");
-        if(noBridge>0) Write($"Aseprite 창 {noBridge}개의 열린 파일 목록을 읽지 못했습니다. integrations\\aseprite의 확장을 설치하고 Aseprite를 다시 시작하세요. (또는 [선택 창 프로젝트 지정]으로 파일 지정)");
+        if(noBridge>0) Write($"Aseprite 창 {noBridge}개의 연동 정보가 없거나 5분 이상 지났습니다. Aseprite에서 탭 전환 후 새로고침하세요. 계속 확인되지 않으면 integrations\\aseprite 확장을 확인하거나 파일을 직접 지정하세요.");
     }
     private void ApplyFilter()
     {
@@ -555,7 +566,10 @@ public sealed class MainForm : Form
             Item("프로젝트 경로 캐시 JSON 위치 열기",()=>ShowInExplorer(Path.Combine(DataRoot,"project-cache.json"))),
             Item("데이터 폴더 열기",()=>OpenFolder(DataRoot)),
             new ToolStripSeparator(),
-            Item("종료",Close)]);
+            Item("트레이 / 자동 저장 설정",UsabilitySettings),
+            Item("백업 / 자동 저장 복구",ShowHistory),
+            Item("즐겨찾기 전환",()=>{if(loadedProfile is {} p){if(!settings.Favorites.Remove(p))settings.Favorites.Add(p);SaveSettings();}}),
+            Item("종료",ExitApp)]);
         var plugins=new ToolStripMenuItem("확장(&E)");
         plugins.DropDownItems.AddRange([
             Item("확장 기능 관리...",ManagePlugins),
@@ -602,7 +616,10 @@ public sealed class MainForm : Form
         editor.KeyDown+=(_,e)=>{if(e.KeyCode==Keys.Delete){RemoveFromEditor();e.Handled=true;}};
         var remove=new Button{Text="선택 제거",Width=90}; var openJson=new Button{Text="JSON 위치 열기",Width=115};
         var bottom=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(4)};
-        bottom.Controls.AddRange([new Label{Text="이름:",AutoSize=true,Margin=new Padding(3,7,3,0)},name,saveProfile,remove,openJson]);
+        var editSaved=new Button{Text="선택 편집",Width=90}; editSaved.Click+=(_,_)=>EditSelected();
+        var refreshSaved=new Button{Text="현재 배치로 갱신",Width=135}; refreshSaved.Click+=(_,_)=>UpdateFromCurrent();
+        editor.DoubleClick+=(_,_)=>EditSelected();
+        bottom.Controls.AddRange([editSaved,refreshSaved,new Label{Text="이름:",AutoSize=true,Margin=new Padding(3,7,3,0)},name,saveProfile,remove,openJson]);
         var panel=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5};
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent,100)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -683,8 +700,9 @@ public sealed class MainForm : Form
             {
                 var item=new ListViewItem(Path.GetFileNameWithoutExtension(d.Path)){Tag=d,UseItemStyleForSubItems=false};
                 item.SubItems.Add(d.Title); item.SubItems.Add(DesktopLabel(d)); item.SubItems.Add(RectLabel(d));
-                var cell=item.SubItems.Add(ProjectLabel(d));
-                cell.ForeColor=MissingProject(d) ? System.Drawing.Color.Firebrick : editor.ForeColor;
+                var issue=PathIssue(d);
+                var cell=item.SubItems.Add(issue.Length>0 ? "["+issue+"] "+ProjectLabel(d) : ProjectLabel(d));
+                cell.ForeColor=issue.Length>0 || MissingProject(d) ? System.Drawing.Color.Firebrick : editor.ForeColor;
                 editor.Items.Add(item);
             }
         }
@@ -696,7 +714,7 @@ public sealed class MainForm : Form
         string title=loadedProfile ?? "새 프로필";
         editorHeader.Text=$"프로필 편집 — {title} · 창 {editing.Count}개"+(editorDirty || name.Text.Trim()!=(loadedProfile ?? "") ? " (저장 안 됨)" : "");
     }
-    private bool ConfirmDiscard() => !editorDirty
+    private bool ConfirmDiscard() => !(editorDirty || name.Text.Trim()!=(loadedProfile ?? ""))
         || MessageBox.Show(this,"편집 중인 프로필에 저장하지 않은 변경이 있습니다. 버리고 계속할까요?","프로필 편집",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)==DialogResult.Yes;
     private void OnProfileSelected()
     {
@@ -714,8 +732,11 @@ public sealed class MainForm : Form
     }
     private void LoadIntoEditor(string? p)
     {
+        Snapshot? data=p==null ? null : ReadProfile(p);
+        if(p!=null && data==null) {SelectProfileQuietly(loadedProfile);return;}
         editing.Clear();
-        if(p!=null && ReadProfile(p) is {} data) editing.AddRange(data.Windows);
+        layouts=data?.Layouts ?? [];
+        if(data!=null) editing.AddRange(ResolveLayout(data));
         loadedProfile=p; editorDirty=false; name.Text=p ?? "";
         FillEditor();
     }
@@ -788,7 +809,7 @@ public sealed class MainForm : Form
     private Snapshot? ReadProfile(string p)
     {
         Snapshot? data;
-        try { data=JsonSerializer.Deserialize<Snapshot>(File.ReadAllText(ProfilePath(p),Encoding.UTF8)); }
+        try { data=ProfileStore.Read(ProfilePath(p)); }
         catch(Exception ex) {Write("읽기 실패: "+ex.Message);return null;}
         if(data==null || (data.SchemaVersion!=1 && data.SchemaVersion!=2 && data.SchemaVersion!=3) || data.Windows==null) {Write("지원하지 않는 프로필 형식.");return null;}
         return data;
@@ -811,8 +832,10 @@ public sealed class MainForm : Form
             && MessageBox.Show("동일한 이름의 프로필을 덮어쓸까요?","확인",MessageBoxButtons.YesNo)!=DialogResult.Yes) return;
         try
         {
-            var data=new Snapshot{SchemaVersion=3,Name=p,DesktopCount=Native.GetDesktopCount(),Windows=picked};
-            File.WriteAllText(path,JsonSerializer.Serialize(data,new JsonSerializerOptions{WriteIndented=true}),new UTF8Encoding(false));
+            var data=CurrentSnapshot(p);
+            ProfileStore.Write(path,data,true);
+            layouts=data.Layouts;
+            RebuildTray();
             loadedProfile=p; editorDirty=false;
             RefreshProfiles(); UpdateEditorHeader();
             foreach(var w in picked) projectCache.Remember(PluginIdOf(w),w.ProjectPath);
@@ -821,129 +844,11 @@ public sealed class MainForm : Form
         }
         catch(Exception ex) { Write("저장 실패: "+ex.Message); }
     }
-    private async Task RestoreProfile()
-    {
-        if(profiles.SelectedItem is not string p) {MessageBox.Show("복원할 프로필을 선택하세요.");return;}
-        if(ReadProfile(p) is not {} data) return;
-        string unsaved=editorDirty ? "\n\n편집 중인 저장 안 된 변경은 반영되지 않습니다. (저장된 파일 기준으로 복원)" : "";
-        if(MessageBox.Show($"'{p}'의 {data.Windows.Count}개 창을 복원합니다.\n기존 프로그램은 종료하지 않습니다. 새 프로그램이 실행될 수 있습니다.{unsaved}\n계속할까요?","복원 확인",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
-        restore.Enabled=false;
-        try {await DoRestore(data);}
-        finally {restore.Enabled=true;}
-    }
-    private async Task DoRestore(Snapshot data)
-    {
-        int count=Native.GetDesktopCount();
-        int required=data.Windows.Where(w=>!w.Pinned && !w.AllDesktops).Select(w=>w.DesktopIndex).DefaultIfEmpty(0).Max()+1;
-        if(required>count && createDesktops.Checked)
-        {
-            // Limit unexpected desktop creation even when loading a manually edited file.
-            if(required>20) {Write("필요 데스크톱 수가 20개를 초과하여 자동 생성을 건너뜁니다.");return;}
-            for(int i=count;i<required;i++)
-            {
-                int r=Native.CreateDesktop();
-                if(r==-1 || Native.GetDesktopCount()<=count) {Write("데스크톱 생성 실패. 더 이상 생성하지 않습니다.");break;}
-                count=Native.GetDesktopCount(); Write($"가상 데스크톱 생성. 현재 {count}개");
-            }
-        }
-        var reserved=new HashSet<IntPtr>(); int ok=0,failed=0;
-        foreach(var target in data.Windows)
-        {
-            if(target.Pinned) {Write($"고정 창 제외: {target.Title}");continue;}
-            if(!target.AllDesktops && (target.DesktopIndex>=count || target.DesktopIndex<0)) {Write($"데스크톱 {target.DesktopIndex+1} 없음: {target.Title}");failed++;continue;}
-            if(!File.Exists(target.Path)) {Write($"실행 파일 없음: {target.Path}");failed++;continue;}
-            string pluginId=PluginIdOf(target);
-            AppPlugin? plugin=pluginId=="" ? null : pluginsCatalog.ById(pluginId);
-            bool projectMode=!string.IsNullOrWhiteSpace(target.ProjectPath);
-            bool filesMode=!projectMode && target.OpenFiles.Count>0;
-            if((projectMode || filesMode) && plugin==null) {Write($"확장 규칙 없음: {pluginId} ({target.Title}). plugins 폴더 확인");failed++;continue;}
-            if(projectMode && !ProjectDetector.IsValid(target.ProjectPath,plugin!))
-            {Write($"프로젝트 경로가 없거나 유효하지 않음: {target.ProjectPath}");failed++;continue;}
-            var files=target.OpenFiles.Where(File.Exists).ToList();
-            foreach(var gone in target.OpenFiles.Except(files)) Write($"파일 없음, 건너뜀: {gone}");
-            // A bare executable match can refer to a DIFFERENT Unity/VS Code project.
-            // Use the project label in the title only as a conservative reuse hint.
-            string projectLabel=projectMode ? ProjectDetector.Label(target.ProjectPath) : "";
-            // Files cannot be handed to a running instance, so only reuse a window that is plainly the
-            // same session (same active file in the title); otherwise start one with the files.
-            LiveWindow? candidate=projectMode
-                ? Scanner.Scan().Where(x=>!reserved.Contains(x.Handle) && x.Data.Path.Equals(target.Path,StringComparison.OrdinalIgnoreCase)
-                    && x.Data.Title.Contains(projectLabel,StringComparison.OrdinalIgnoreCase)).FirstOrDefault()
-                : filesMode
-                ? Scanner.Scan().FirstOrDefault(x=>!reserved.Contains(x.Handle) && x.Data.Path.Equals(target.Path,StringComparison.OrdinalIgnoreCase)
-                    && x.Data.Title.Equals(target.Title,StringComparison.OrdinalIgnoreCase))
-                : BestMatch(Scanner.Scan().Where(x=>!reserved.Contains(x.Handle)),target);
-            if(candidate==null)
-            {
-                try
-                {
-                    var psi=new ProcessStartInfo(target.Path){UseShellExecute=true,WorkingDirectory=Path.GetDirectoryName(target.Path)!};
-                    if(projectMode)
-                    {
-                        foreach(var arg in plugin!.LaunchArguments) psi.ArgumentList.Add(arg.Replace("{projectPath}",target.ProjectPath));
-                        Write($"프로젝트 열기 요청: {plugin.Name}: {target.ProjectPath}");
-                    }
-                    if(filesMode)
-                    {
-                        // An argument with {file} is repeated once per file.
-                        foreach(var arg in plugin!.LaunchArguments)
-                            if(arg.Contains("{file}")) foreach(var f in files) psi.ArgumentList.Add(arg.Replace("{file}",f));
-                            else psi.ArgumentList.Add(arg);
-                        Write($"{plugin.Name} 파일 열기 요청: {files.Count}개");
-                    }
-                    // Capture pre-existing windows to avoid moving an unrelated project window.
-                    var before=Scanner.Scan().Select(x=>x.Handle).ToHashSet();
-                    Process.Start(psi);
-                    for(int retry=0;retry<(projectMode || filesMode ? plugin!.WaitSeconds * 2 : 60) && candidate==null;retry++)
-                    {
-                        await Task.Delay(500);
-                        var matches=Scanner.Scan().Where(x=>!reserved.Contains(x.Handle) && x.Data.Path.Equals(target.Path,StringComparison.OrdinalIgnoreCase));
-                        candidate=projectMode
-                            ? matches.FirstOrDefault(x=>!before.Contains(x.Handle) && x.Data.Title.Contains(projectLabel,StringComparison.OrdinalIgnoreCase))
-                            : filesMode ? matches.FirstOrDefault(x=>!before.Contains(x.Handle))
-                            : BestMatch(matches,target);
-                    }
-                }
-                catch(Exception ex){Write($"실행 실패 {target.Title}: {ex.Message}");}
-            }
-            if(candidate==null){Write($"창을 찾지 못함: {target.Title}");failed++;continue;}
-            reserved.Add(candidate.Handle);
-            try
-            {
-                int move=target.AllDesktops ? 0 : Native.MoveWindowToDesktopNumber(candidate.Handle,target.DesktopIndex);
-                if(move==-1) {Write($"데스크톱 이동 실패: {target.Title}");failed++;continue;}
-                // Normal rect is persisted independently of the window's current maximized state.
-                var wp=Native.WINDOWPLACEMENT.Init();
-                if(!Native.GetWindowPlacement(candidate.Handle,ref wp)) {Write($"창 위치 읽기 실패: {target.Title}");failed++;continue;}
-                var rect=ClampToScreens(target);
-                wp.rcNormalPosition=new Native.RECT{Left=rect.Left,Top=rect.Top,Right=rect.Right,Bottom=rect.Bottom};
-                wp.showCmd=target.Maximized?3:target.Minimized?2:1;
-                if(!Native.SetWindowPlacement(candidate.Handle,ref wp)) {Write($"위치 복원 실패: {target.Title}");failed++;continue;}
-                ok++; Write($"완료: {target.Title} → " + (target.AllDesktops ? "모든 데스크톱" : $"데스크톱 {target.DesktopIndex+1}"));
-            }
-            catch(Exception ex){failed++;Write($"복원 오류 {target.Title}: {ex.Message}");}
-        }
-        Write($"복원 종료: 성공 {ok}, 실패 {failed}. 플러그인 프로젝트 실행은 지원하지만 미저장 내용은 복원하지 않습니다.");
-        MessageBox.Show($"창 복원: 성공 {ok}, 실패 {failed}\n자세한 내용은 실행 로그를 확인하세요.","복원 결과");
-        RefreshWindows();
-    }
-    private static LiveWindow? BestMatch(IEnumerable<LiveWindow> candidates,SavedWindow target)
-    {
-        var same=candidates.Where(x=>string.Equals(x.Data.Path,target.Path,StringComparison.OrdinalIgnoreCase)).ToList();
-        if(same.Count==0)return null;
-        return same.OrderByDescending(x=>string.Equals(x.Data.Title,target.Title,StringComparison.OrdinalIgnoreCase)?1000:0)
-            .ThenByDescending(x=>x.Data.DesktopIndex==target.DesktopIndex?50:0)
-            .ThenByDescending(x=>Similarity(x.Data.Title,target.Title)).First();
-    }
-    private static int Similarity(string a,string b)
-    {
-        int i=0; while(i<a.Length && i<b.Length && char.ToUpperInvariant(a[i])==char.ToUpperInvariant(b[i]))i++;return i;
-    }
     private static System.Drawing.Rectangle ClampToScreens(SavedWindow w)
     {
-        var r=new System.Drawing.Rectangle(w.Left,w.Top,Math.Clamp(w.Width,150,10000),Math.Clamp(w.Height,100,10000));
-        if(Screen.AllScreens.Any(s=>s.WorkingArea.IntersectsWith(r))) return r;
-        var area=Screen.PrimaryScreen?.WorkingArea ?? new System.Drawing.Rectangle(0,0,1280,720);
-        return new System.Drawing.Rectangle(area.Left+30,area.Top+30,Math.Min(r.Width,area.Width-60),Math.Min(r.Height,area.Height-60));
+        var area=Screen.FromRectangle(new System.Drawing.Rectangle(w.Left,w.Top,Math.Max(1,w.Width),Math.Max(1,w.Height))).WorkingArea;
+        int width=Math.Clamp(w.Width,Math.Min(150,area.Width),area.Width);
+        int height=Math.Clamp(w.Height,Math.Min(100,area.Height),area.Height);
+        return new System.Drawing.Rectangle(Math.Clamp(w.Left,area.Left,area.Right-width),Math.Clamp(w.Top,area.Top,area.Bottom-height),width,height);
     }
 }
