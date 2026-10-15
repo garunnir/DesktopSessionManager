@@ -133,13 +133,15 @@ internal sealed class ProjectDetector(ProjectCache cache)
     }
 
     // The project name the app shows in its window title.
-    public static string Label(string path)
+    public static string Label(string path, AppPlugin plugin)
     {
         if (path.EndsWith(".code-workspace", StringComparison.OrdinalIgnoreCase)) return Path.GetFileNameWithoutExtension(path);
-        string godot = Path.Combine(path, "project.godot"); // Godot titles use application/config/name, not the folder
+        // Godot titles use application/config/name, not the folder. Other apps (e.g. VS Code opening
+        // the same folder) still show the folder name.
+        string godot = Path.Combine(path, "project.godot");
         try
         {
-            if (File.Exists(godot))
+            if (plugin.ProjectPicker == "godot-folder" && File.Exists(godot))
                 foreach (var line in File.ReadLines(godot))
                     if (line.StartsWith("config/name=\"") && line.EndsWith('"') && line.Length > 14)
                         return line[13..^1].Replace("\\\"", "\"");
@@ -153,12 +155,15 @@ internal sealed class ProjectDetector(ProjectCache cache)
         string? path = FromCommandLine(w.ProcessId, plugin);
         // Normalize separators: Godot passes Z:/a/b.
         try { if (path != null) path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); } catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { path = null; }
-        if (path != null && IsValid(path, plugin) && w.Data.Title.Contains(Label(path), StringComparison.OrdinalIgnoreCase)) return path;
         bool vscode = plugin.ProjectPicker == "workspace-or-folder";
+        var segments = Segments(w.Data.Title, vscode ? StateFor(w.Data.Path).Separator : " - ");
+        // VS Code shares one process across windows, so its command line names only the first window's
+        // folder: accept it only when this title shows that name as a whole word, not as a substring.
+        if (path != null && IsValid(path, plugin) && MatchByName(w.Data.Title, segments, [path], plugin) != null) return path;
         if (vscode && FromVsCodeState(w.Data, plugin) is { } found) return found;
         // Last resort: projects the user assigned before.
         var known = cache.For(plugin.Id).Where(x => IsValid(x, plugin)).ToList();
-        return known.Count == 0 ? null : MatchByName(w.Data.Title, Segments(w.Data.Title, vscode ? StateFor(w.Data.Path).Separator : " - "), known);
+        return known.Count == 0 ? null : MatchByName(w.Data.Title, segments, known, plugin);
     }
 
     // Written by integrations/aseprite/desktop-session-bridge; Aseprite shows only the active tab in its title.
@@ -223,7 +228,7 @@ internal sealed class ProjectDetector(ProjectCache cache)
         foreach (var s in segments)
             if (Path.IsPathFullyQualified(s) && IsValid(s, plugin)) return Path.TrimEndingDirectorySeparator(s);
 
-        return MatchByName(w.Title, segments, StateFor(w.Path).Opened.Where(x => IsValid(x, plugin)).ToList());
+        return MatchByName(w.Title, segments, StateFor(w.Path).Opened.Where(x => IsValid(x, plugin)).ToList(), plugin);
     }
 
     private VsCodeState StateFor(string exePath)
@@ -233,14 +238,14 @@ internal sealed class ProjectDetector(ProjectCache cache)
     }
 
     // Pick the one candidate whose project name the title shows; null when none or still ambiguous.
-    private static string? MatchByName(string title, List<string> segments, List<string> candidates)
+    private static string? MatchByName(string title, List<string> segments, List<string> candidates, AppPlugin plugin)
     {
         // 2) A title segment equal to the folder/workspace name (default title layout).
-        var matches = candidates.Where(x => segments.Any(s => s.Equals(Label(x), StringComparison.OrdinalIgnoreCase)
-            || s.Equals(Label(x) + " (Workspace)", StringComparison.OrdinalIgnoreCase))).ToList();
+        var matches = candidates.Where(x => segments.Any(s => s.Equals(Label(x, plugin), StringComparison.OrdinalIgnoreCase)
+            || s.Equals(Label(x, plugin) + " (Workspace)", StringComparison.OrdinalIgnoreCase))).ToList();
         // 3) Custom title layouts: the name anywhere in the title as a whole word.
         if (matches.Count == 0)
-            matches = candidates.Where(x => Regex.IsMatch(title, $@"(?<![\p{{L}}\p{{N}}_.-]){Regex.Escape(Label(x))}(?![\p{{L}}\p{{N}}_.-])", RegexOptions.IgnoreCase)).ToList();
+            matches = candidates.Where(x => Regex.IsMatch(title, $@"(?<![\p{{L}}\p{{N}}_.-]){Regex.Escape(Label(x, plugin))}(?![\p{{L}}\p{{N}}_.-])", RegexOptions.IgnoreCase)).ToList();
         if (matches.Count == 1) return matches[0];
         // 4) Same-named folders: prefer the one that contains the active editor's file (first title segment).
         if (matches.Count > 1 && segments.Count > 1)
@@ -317,6 +322,8 @@ internal sealed class ProjectDetector(ProjectCache cache)
         if (uri.IsLoopback && path.Length >= 4 && path[0] is '/' or '\\'
             && char.IsAsciiLetter(path[1]) && path[2] == ':' && path[3] is '/' or '\\')
             path = path[1..];
+        // The URI lowercases the drive letter (z:); match how Windows and the other detectors write it.
+        if (path.Length >= 2 && path[1] == ':') path = char.ToUpperInvariant(path[0]) + path[1..];
         return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
     }
 }

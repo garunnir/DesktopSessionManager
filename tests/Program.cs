@@ -86,5 +86,16 @@ try
     Assert(invalid, "malformed profile rejected before editing");
 }
 finally { Directory.Delete(root, true); }
+
+string godotRoot = Path.Combine(Path.GetTempPath(), "dsm-label-" + Guid.NewGuid().ToString("N"), "project-beta");
+Directory.CreateDirectory(godotRoot);
+try
+{
+    File.WriteAllLines(Path.Combine(godotRoot, "project.godot"), ["[application]", "config/name=\"Project\""]);
+    Assert(ProjectDetector.Label(godotRoot, new AppPlugin { ProjectPicker = "godot-folder" }) == "Project", "Godot title uses config name");
+    Assert(ProjectDetector.Label(godotRoot, new AppPlugin { ProjectPicker = "workspace-or-folder" }) == "project-beta", "VS Code title uses folder name of a Godot project");
+}
+finally { Directory.Delete(Path.GetDirectoryName(godotRoot)!, true); }
+Assert(ProjectDetector.VsCodeFilePath(new Uri("file:///z%3A/Work/a")) == @"Z:\Work\a", "VS Code URI drive letter normalized");
 Console.WriteLine($"{checks} checks passed");
 
