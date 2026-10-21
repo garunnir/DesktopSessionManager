@@ -161,7 +161,7 @@ public sealed partial class MainForm
     }
     private void EditSelected()
     {
-        if (editor.SelectedItems.Count == 1) EditWindow((SavedWindow)editor.SelectedItems[0].Tag!);
+        if (SelectedEditorWindows() is [var one]) EditWindow(one);
         else MessageBox.Show(this, "편집할 프로필 항목 하나를 선택하세요.");
     }
     private List<LiveWindow> ScanIdentified()

@@ -76,6 +76,7 @@ internal sealed class UserSettings
     public bool CloseToTray { get; set; }
     public bool Hotkey { get; set; }
     public int AutoSaveMinutes { get; set; }
+    public bool ShowLiveWindows { get; set; }
     public List<string> Favorites { get; set; } = [];
     public List<string> Recent { get; set; } = [];
 }

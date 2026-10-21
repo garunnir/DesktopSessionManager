@@ -97,5 +97,23 @@ try
 }
 finally { Directory.Delete(Path.GetDirectoryName(godotRoot)!, true); }
 Assert(ProjectDetector.VsCodeFilePath(new Uri("file:///z%3A/Work/a")) == @"Z:\Work\a", "VS Code URI drive letter normalized");
+SavedWindow OnDesktop(int desktop, string name = "") => new() { DesktopIndex = desktop, DesktopName = name };
+var d0 = OnDesktop(0, "code"); var d1 = OnDesktop(1, "art"); var d2 = OnDesktop(2); var pinned = OnDesktop(2); pinned.Pinned = true;
+var everywhere = OnDesktop(-1); everywhere.AllDesktops = true;
+List<SavedWindow> board = [d0, d1, d2, pinned, everywhere];
+Assert(DesktopOrder.Count(board) == 3, "board shows every desktop a movable window uses");
+DesktopOrder.Reorder(board, 0, 2);
+Assert(d0.DesktopIndex == 2 && d1.DesktopIndex == 0 && d2.DesktopIndex == 1 && pinned.DesktopIndex == 1, "moving a desktop later shifts the ones in between forward");
+DesktopOrder.Reorder(board, 2, 0);
+Assert(d0.DesktopIndex == 0 && d1.DesktopIndex == 1 && d2.DesktopIndex == 2 && everywhere.DesktopIndex == -1, "moving a desktop earlier restores the order; all-desktop windows untouched");
+DesktopOrder.MoveTo([d2, pinned], board, 1);
+Assert(d2.DesktopIndex == 1 && d2.DesktopName == "art" && pinned.DesktopIndex == 2, "moved window joins the target desktop and its name; pinned stays");
+Assert(DesktopOrder.Count(board) == 2, "emptied last desktop disappears");
+var gap = OnDesktop(3); board.Add(gap);
+DesktopOrder.Reorder(board, 2, DesktopOrder.Count(board) - 1);
+Assert(gap.DesktopIndex == 2 && DesktopOrder.Count(board) == 3, "deleting an empty desktop pulls later desktops forward");
+var onLeft = new SavedWindow { Left = 100, Top = 50, Width = 800, Height = 600 };
+DesktopOrder.MoveToMonitor(onLeft, new System.Drawing.Rectangle(0, 0, 1920, 1080), new System.Drawing.Rectangle(1920, -200, 2560, 1440));
+Assert(onLeft.Left == 2020 && onLeft.Top == -150 && onLeft.Width == 800, "monitor move keeps the offset within the monitor");
 Console.WriteLine($"{checks} checks passed");
 

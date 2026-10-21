@@ -221,6 +221,12 @@ public sealed partial class MainForm : Form
     // Right half: the profile being edited. Windows dragged from the list are copied into it.
     private readonly ListView editor = new() { Dock=DockStyle.Fill, View=View.Details, FullRowSelect=true, GridLines=true, HideSelection=false };
     private readonly Label editorHeader = new() { AutoSize=true, Margin=new Padding(8,10,3,0) };
+    // The editor shows the profile either as desktop cards (default) or as the detailed list.
+    private readonly DesktopBoard board = new() { Dock=DockStyle.Fill };
+    private readonly TabControl views = new() { Dock=DockStyle.Fill };
+    private readonly TabPage boardPage = new("화면"), listPage = new("목록");
+    private SplitContainer livePanel = null!;
+    private readonly Button liveToggle = new() { AutoSize=true };
     private readonly Button saveProfile = new() { Text="프로필 저장", Width=100 };
     private readonly List<SavedWindow> editing=[];
     private string? loadedProfile;
@@ -243,22 +249,26 @@ public sealed partial class MainForm : Form
         int[] widths=[120,240,110,150,200,280,230];
         for(int i=0;i<ColumnNames.Length;i++) windows.Columns.Add(ColumnNames[i],widths[i]);
         var scan=new Button{Text="현재 창 새로고침",Width=130};
-        var addChecked=new Button{Text="체크된 창 프로필에 추가 ▶",Width=190};
-        var row1=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(8)};
-        row1.Controls.AddRange([scan,setProject,addChecked,updateLink]);
+        var addChecked=new Button{Text="◀ 체크된 창 프로필에 추가",Width=190};
+        var liveTitle=new Label{Text="현재 열린 창",AutoSize=true,Font=new System.Drawing.Font(Font,System.Drawing.FontStyle.Bold),Margin=new Padding(8,10,3,0)};
+        var row1=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(4,0,4,0)};
+        row1.Controls.AddRange([addChecked,scan,setProject]);
         var checkAll=new Button{Text="모두 체크",Width=90};
         var uncheckAll=new Button{Text="모두 해제",Width=90};
         var rowFind=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(8,0,8,4)};
         rowFind.Controls.AddRange([find,checkAll,uncheckAll,checkCount]);
-        // Left half: currently open windows. Right half: profile editor (drop target).
-        var left=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3};
-        left.RowStyles.Add(new RowStyle(SizeType.AutoSize)); left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        left.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-        left.Controls.Add(row1,0,0); left.Controls.Add(rowFind,0,1); left.Controls.Add(windows,0,2);
-        // FixedPanel.None keeps the split proportional when the window is resized.
-        var split=new SplitContainer{Dock=DockStyle.Fill,Orientation=Orientation.Vertical,FixedPanel=FixedPanel.None};
-        split.Panel1.Controls.Add(left); split.Panel2.Controls.Add(BuildProfileEditor());
-        Load+=(_,_)=>{split.Panel1MinSize=420;split.Panel2MinSize=320;split.SplitterDistance=split.Width/2;};
+        // Main area: the profile (desktop cards). Right side panel: currently open windows to drag in, shown on demand.
+        var livePane=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=4};
+        livePane.RowStyles.Add(new RowStyle(SizeType.AutoSize)); livePane.RowStyles.Add(new RowStyle(SizeType.AutoSize)); livePane.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        livePane.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        livePane.Controls.Add(liveTitle,0,0); livePane.Controls.Add(row1,0,1); livePane.Controls.Add(rowFind,0,2); livePane.Controls.Add(windows,0,3);
+        // FixedPanel.Panel2 keeps the side panel's width when the window is resized; the profile takes the rest.
+        var split=new SplitContainer{Dock=DockStyle.Fill,Orientation=Orientation.Vertical,FixedPanel=FixedPanel.Panel2};
+        split.Panel1.Controls.Add(BuildProfileEditor()); split.Panel2.Controls.Add(livePane);
+        livePanel=split;
+        Load+=(_,_)=>{split.Panel1MinSize=420;split.Panel2MinSize=320;split.SplitterDistance=split.Width*58/100;
+            // An empty profile has nothing to show yet, so open the source of windows.
+            ShowLiveWindows(settings.ShowLiveWindows || editing.Count==0);};
         var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3};
         layout.RowStyles.Add(new RowStyle(SizeType.Percent,72)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute,25));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent,28));
@@ -608,8 +618,9 @@ public sealed partial class MainForm : Form
         editorHeader.Font=new System.Drawing.Font(Font,System.Drawing.FontStyle.Bold);
         var newProfile=new Button{Text="새 프로필",Width=90};
         var top=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(4)};
-        top.Controls.AddRange([new Label{Text="프로필:",AutoSize=true,Margin=new Padding(3,7,3,0)},profiles,newProfile,restore,createDesktops]);
-        var hint=new Label{Text="왼쪽 창 목록에서 창을 끌어다 놓으면 이 프로필에 추가됩니다. 여러 창을 선택해 한 번에 끌 수 있고, 같은 창을 다시 놓으면 최신 상태로 바뀝니다. Delete 키로 제거.",
+        top.Controls.AddRange([new Label{Text="프로필:",AutoSize=true,Margin=new Padding(3,7,3,0)},profiles,newProfile,restore,createDesktops,liveToggle,updateLink]);
+        liveToggle.Click+=(_,_)=>{ShowLiveWindows(livePanel.Panel2Collapsed);settings.ShowLiveWindows=!livePanel.Panel2Collapsed;SaveSettings();};
+        var hint=new Label{Text="[현재 창 추가]로 열린 창 목록을 펼쳐, 창을 데스크톱 카드의 화면 위에 끌어다 놓으세요. 놓은 데스크톱·모니터에 배치됩니다. 카드 제목을 끌면 데스크톱 순서가 바뀝니다.",
             AutoSize=true,ForeColor=System.Drawing.SystemColors.GrayText,Margin=new Padding(8,0,8,6),MaximumSize=new System.Drawing.Size(560,0)};
         string[] columns=["프로그램","창 제목","데스크톱","창 위치/크기","프로젝트 경로"]; int[] widths=[110,200,100,140,200];
         for(int i=0;i<columns.Length;i++) editor.Columns.Add(columns[i],widths[i]);
@@ -623,7 +634,12 @@ public sealed partial class MainForm : Form
         var panel=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5};
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent,100)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.Controls.Add(editorHeader,0,0); panel.Controls.Add(top,0,1); panel.Controls.Add(hint,0,2); panel.Controls.Add(editor,0,3); panel.Controls.Add(bottom,0,4);
+        board.Changed+=()=>{editorDirty=true;FillEditor();};
+        board.EditRequested+=w=>EditWindow(w); board.RemoveRequested+=RemoveFromEditor;
+        board.Dropped+=(dropped,place)=>AddToEditor(dropped,place); board.IssueOf=PathIssue;
+        boardPage.Controls.Add(board); listPage.Controls.Add(editor);
+        views.TabPages.AddRange([boardPage,listPage]);
+        panel.Controls.Add(editorHeader,0,0); panel.Controls.Add(top,0,1); panel.Controls.Add(hint,0,2); panel.Controls.Add(views,0,3); panel.Controls.Add(bottom,0,4);
         panel.SizeChanged+=(_,_)=>hint.MaximumSize=new System.Drawing.Size(Math.Max(200,panel.ClientSize.Width-20),0);
         profiles.SelectedIndexChanged+=(_,_)=>OnProfileSelected();
         newProfile.Click+=(_,_)=>NewProfile(); remove.Click+=(_,_)=>RemoveFromEditor();
@@ -642,6 +658,7 @@ public sealed partial class MainForm : Form
     // Drag events do not bubble, so every child of the drop area needs its own handlers.
     private void EnableWindowDrop(Control area,Control target)
     {
+        if(target is DesktopBoard) return; // places dropped windows itself, see board.Dropped
         target.AllowDrop=true;
         static SavedWindow[]? Dragged(DragEventArgs e) => e.Data?.GetData(typeof(SavedWindow[])) as SavedWindow[];
         target.DragEnter+=(_,e)=>
@@ -662,13 +679,16 @@ public sealed partial class MainForm : Form
         a.Path.Equals(b.Path,StringComparison.OrdinalIgnoreCase) && a.Title==b.Title && a.DesktopIndex==b.DesktopIndex
         && a.Left==b.Left && a.Top==b.Top && a.Width==b.Width && a.Height==b.Height;
     // Stores copies: the scanned objects keep changing (project assignment, rescans).
-    private void AddToEditor(IEnumerable<SavedWindow> source)
+    // `place` adjusts each copy before it goes in, e.g. the desktop and monitor it was dropped on.
+    private void AddToEditor(IEnumerable<SavedWindow> source,Action<SavedWindow>? place=null)
     {
         int added=0,updated=0;
         foreach(var d in source)
         {
             var copy=JsonSerializer.Deserialize<SavedWindow>(JsonSerializer.Serialize(d))!;
-            int at=editing.FindIndex(x=>SameWindow(x,d));
+            place?.Invoke(copy);
+            // The Id catches a window dropped again after its copy was placed on another desktop or monitor.
+            int at=editing.FindIndex(x=>x.Id==d.Id || SameWindow(x,d));
             if(at>=0) {editing[at]=copy;updated++;}
             else {editing.Add(copy);added++;}
         }
@@ -685,7 +705,7 @@ public sealed partial class MainForm : Form
     }
     private void RemoveFromEditor()
     {
-        var gone=editor.SelectedItems.Cast<ListViewItem>().Select(x=>(SavedWindow)x.Tag!).ToList();
+        var gone=SelectedEditorWindows();
         if(gone.Count==0) return;
         editing.RemoveAll(gone.Contains);
         editorDirty=true; FillEditor();
@@ -707,8 +727,11 @@ public sealed partial class MainForm : Form
             }
         }
         finally { editor.EndUpdate(); }
+        board.SetWindows(editing);
         UpdateEditorHeader();
     }
+    private List<SavedWindow> SelectedEditorWindows() => views.SelectedTab==boardPage ? board.Selected
+        : editor.SelectedItems.Cast<ListViewItem>().Select(x=>(SavedWindow)x.Tag!).ToList();
     private void UpdateEditorHeader()
     {
         string title=loadedProfile ?? "새 프로필";
@@ -743,7 +766,12 @@ public sealed partial class MainForm : Form
     private void NewProfile()
     {
         if(!ConfirmDiscard()) return;
-        SelectProfileQuietly(null); LoadIntoEditor(null); name.Focus();
+        SelectProfileQuietly(null); LoadIntoEditor(null); ShowLiveWindows(true); name.Focus();
+    }
+    private void ShowLiveWindows(bool show)
+    {
+        livePanel.Panel2Collapsed=!show;
+        liveToggle.Text=show ? "현재 창 목록 닫기 ▶" : "◀ 현재 창 추가";
     }
     private void OpenProfileJson()
     {
@@ -763,7 +791,7 @@ public sealed partial class MainForm : Form
             if(pick.ShowDialog()!=DialogResult.OK)return;
             w.PluginId=plugin.Id; w.ProjectKind=""; w.ProjectPath=""; w.OpenFiles=pick.FileNames.ToList();
             ShowProject(windows.SelectedItems[0]);
-            Write($"{plugin.Name} {FilesLabel(w.OpenFiles)} (이 창을 오른쪽 프로필에 끌어다 놓고 저장하세요)");
+            Write($"{plugin.Name} {FilesLabel(w.OpenFiles)} (이 창을 왼쪽 프로필에 끌어다 놓고 저장하세요)");
             return;
         }
         string chosen="";
@@ -791,7 +819,7 @@ public sealed partial class MainForm : Form
         w.PluginId=plugin.Id; w.ProjectKind="";w.ProjectPath=chosen;
         projectCache.Remember(plugin.Id,chosen); SaveProjectCache();
         ShowProject(windows.SelectedItems[0]);
-        Write($"{plugin.Name} 프로젝트 지정: {chosen} (이 창을 오른쪽 프로필에 끌어다 놓고 저장하세요)");
+        Write($"{plugin.Name} 프로젝트 지정: {chosen} (이 창을 왼쪽 프로필에 끌어다 놓고 저장하세요)");
     }
     private string ProfilePath(string p) => Path.Combine(folder, p + ".json");
     // Repopulates the list without loading anything into the editor; keeps the edited profile selected.
@@ -821,11 +849,11 @@ public sealed partial class MainForm : Form
         if (string.IsNullOrWhiteSpace(p) || p.Length>60 || p.IndexOfAny(Path.GetInvalidFileNameChars())>=0 || p.EndsWith('.') || p.EndsWith(' '))
         { MessageBox.Show("프로필 이름(1~60자)을 입력하세요. 파일명에 사용할 수 없는 문자는 제외하세요."); name.Focus(); return; }
         var picked=editing.ToList();
-        if(picked.Count==0) { MessageBox.Show("프로필에 창이 없습니다. 왼쪽 창 목록에서 창을 끌어다 놓으세요."); return; }
+        if(picked.Count==0) { MessageBox.Show("프로필에 창이 없습니다. [현재 창 추가]를 눌러 열린 창을 끌어다 놓으세요."); return; }
         var missing=picked.Where(MissingProject).ToList();
         if(missing.Count>0 && MessageBox.Show($"{missing.Count}개 창은 프로젝트 경로 없이 저장됩니다. 복원 시 프로그램만 실행되고 프로젝트는 열리지 않을 수 있습니다.\n\n"
             +string.Join("\n",missing.Take(10).Select(x=>"· "+x.Title))+(missing.Count>10?"\n…":"")
-            +"\n\n그래도 저장할까요? ([아니오] 후 왼쪽에서 [선택 창 프로젝트 지정]을 하고 그 창을 다시 끌어다 놓으세요.)","프로젝트 미지정",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes) return;
+            +"\n\n그래도 저장할까요? ([아니오] 후 현재 창 목록에서 [선택 창 프로젝트 지정]을 하고 그 창을 다시 끌어다 놓으세요.)","프로젝트 미지정",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes) return;
         string path=ProfilePath(p);
         // Saving over the profile being edited is the normal case; any other existing name is a rename onto it.
         if(File.Exists(path) && !string.Equals(p,loadedProfile,StringComparison.OrdinalIgnoreCase)
@@ -844,7 +872,7 @@ public sealed partial class MainForm : Form
         }
         catch(Exception ex) { Write("저장 실패: "+ex.Message); }
     }
-    private static System.Drawing.Rectangle ClampToScreens(SavedWindow w)
+    internal static System.Drawing.Rectangle ClampToScreens(SavedWindow w)
     {
         var area=Screen.FromRectangle(new System.Drawing.Rectangle(w.Left,w.Top,Math.Max(1,w.Width),Math.Max(1,w.Height))).WorkingArea;
         int width=Math.Clamp(w.Width,Math.Min(150,area.Width),area.Width);
