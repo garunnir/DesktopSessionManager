@@ -53,11 +53,13 @@ public sealed partial class MainForm
         var retry = new Button { Text = "실패 항목만 재시도", AutoSize = true, Enabled = false }; panel.Controls.Add(retry);
         var edit = new Button { Text = "선택 실패 항목 경로 수정", AutoSize = true, Enabled = false }; panel.Controls.Add(edit);
         var close = new Button { Text = "닫기", Enabled = false }; panel.Controls.Add(close);
-        bool running = false;
+        var quit = new Button { Text = "프로그램 종료", AutoSize = true }; panel.Controls.Add(quit);
+        bool running = false, exitAfter = false;
         var rows = new List<(SavedWindow Target, bool Failed)>();
         var reserved = new HashSet<IntPtr>();
         async Task Execute(List<SavedWindow> batch)
         {
+            bool allOk = false;
             running = true; retry.Enabled = edit.Enabled = close.Enabled = false; cancel.Enabled = true;
             restoreCancellation?.Dispose(); restoreCancellation = new CancellationTokenSource(); var token = restoreCancellation.Token;
             failedWindows.Clear(); results.Items.Clear(); rows.Clear();
@@ -81,6 +83,7 @@ public sealed partial class MainForm
                     rows.Add((w, failed)); results.Items.Add($"{w.Title}: {result}"); Write($"{w.Title}: {result}");
                 }, token);
                 status.Text = $"완료 {batch.Count - failedWindows.Count}/{batch.Count} · 실패 {failedWindows.Count}";
+                allOk = failedWindows.Count == 0;
             }
             catch (OperationCanceledException)
             {
@@ -88,9 +91,12 @@ public sealed partial class MainForm
                 status.Text = "중단됨. 이미 실행하거나 이동한 창은 유지됩니다.";
             }
             finally { running = false; cancel.Enabled = false; retry.Enabled = edit.Enabled = failedWindows.Count > 0; close.Enabled = true; }
+            if (allOk) exitAfter = true;
+            if (exitAfter) progress.Close();
         }
         cancel.Click += (_, _) => restoreCancellation?.Cancel();
         close.Click += (_, _) => progress.Close();
+        quit.Click += (_, _) => { exitAfter = true; if (running) restoreCancellation?.Cancel(); else progress.Close(); };
         progress.FormClosing += (_, e) => { if (running) { restoreCancellation?.Cancel(); e.Cancel = true; } };
         retry.Click += async (_, _) => await Execute(failedWindows.ToList());
         edit.Click += (_, _) => { int index = results.SelectedIndex; if (index >= 0 && rows[index].Failed) EditWindow(rows[index].Target); };
@@ -98,6 +104,7 @@ public sealed partial class MainForm
         progress.Shown += async (_, _) => await Execute(targets);
         progress.ShowDialog(this);
         restoreCancellation?.Dispose(); restoreCancellation = null;
+        if (exitAfter) BeginInvoke(ExitApp);
         await Task.CompletedTask;
     }
 
