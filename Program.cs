@@ -828,9 +828,13 @@ public sealed partial class MainForm : Form
         suppressProfileLoad=true;
         try
         {
+            string? keep=loadedProfile ?? profiles.SelectedItem as string;
             profiles.Items.Clear();
-            foreach(var f in Directory.GetFiles(folder,"*.json")) profiles.Items.Add(Path.GetFileNameWithoutExtension(f));
-            if(loadedProfile!=null && profiles.Items.Contains(loadedProfile)) profiles.SelectedItem=loadedProfile;
+            // Most recently restored profiles first, the rest alphabetical.
+            var names=Directory.GetFiles(folder,"*.json").Select(Path.GetFileNameWithoutExtension).OfType<string>().ToList();
+            foreach(var n in settings.Recent.Where(names.Contains).Distinct()) profiles.Items.Add(n);
+            foreach(var n in names.Where(n=>!settings.Recent.Contains(n)).OrderBy(n=>n,StringComparer.CurrentCultureIgnoreCase)) profiles.Items.Add(n);
+            if(keep!=null && profiles.Items.Contains(keep)) profiles.SelectedItem=keep;
         }
         finally { suppressProfileLoad=false; }
     }

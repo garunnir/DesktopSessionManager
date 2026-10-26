@@ -41,7 +41,7 @@ public sealed partial class MainForm
             await RunRestore(data.Windows, layoutOnly);
         }
         catch (Exception ex) { Write("복원 실패: " + ex.Message); MessageBox.Show(this, ex.Message, "복원 실패"); }
-        finally { restoring = false; restore.Enabled = apiReady; RebuildTray(); }
+        finally { restoring = false; restore.Enabled = apiReady; RebuildTray(); RefreshProfiles(); }
     }
 
     private async Task RunRestore(List<SavedWindow> targets, bool layoutOnly)
