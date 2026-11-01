@@ -74,7 +74,7 @@ public sealed partial class MainForm
         }
         AddGroup("즐겨찾기", settings.Favorites);
         AddGroup("최근 복원", settings.Recent);
-        AddGroup("모든 프로필", Directory.GetFiles(folder, "*.json").Select(Path.GetFileNameWithoutExtension).OfType<string>());
+        AddGroup("모든 프로필", OrderedProfileNames());
         menu.Items.Add("종료", null, (_, _) => ExitApp());
         var old = tray.ContextMenuStrip; tray.ContextMenuStrip = menu; old?.Dispose();
     }

@@ -289,8 +289,7 @@ public sealed partial class MainForm : Form
         windows.ColumnClick+=(_,e)=>SortBy(e.Column);
         // ItemChecked also fires while the list creates its handle (e.Item can be null then), so only schedule a recount.
         windows.ItemChecked+=(_,_)=>{if(IsHandleCreated && !countPending){countPending=true;BeginInvoke(UpdateCheckCount);}};
-        Directory.CreateDirectory(folder); RefreshProfiles(); LoadProjectCache();
-        if(profiles.Items.Count>0) profiles.SelectedIndex=0; else UpdateEditorHeader();
+        Directory.CreateDirectory(folder); LoadProjectCache();
         foreach(var error in pluginsCatalog.Reload()) Write("확장 설정 오류: "+error);
         Write($"프로젝트 복원 확장 {pluginsCatalog.All.Count}개 로드됨. 설정 폴더: {pluginsCatalog.Folder}");
         Write(Vda.Status);
@@ -309,7 +308,11 @@ public sealed partial class MainForm : Form
         }
         scan.Enabled=restore.Enabled=addChecked.Enabled=apiReady;
         saveProfile.Enabled=true;
+        // Settings (including Recent) must load before the profile list is filled, or the
+        // combo falls back to alphabetical order until the next restore in this session.
         InitializeUsability();
+        RefreshProfiles();
+        if(profiles.Items.Count>0) profiles.SelectedIndex=0; else UpdateEditorHeader();
         if(apiReady) RefreshWindows();
         updateLink.LinkClicked+=async (_,_)=>{if(latest!=null) await InstallUpdate(latest);};
         Shown+=async (_,_)=>await CheckForUpdate(false);
@@ -822,6 +825,13 @@ public sealed partial class MainForm : Form
         Write($"{plugin.Name} 프로젝트 지정: {chosen} (이 창을 왼쪽 프로필에 끌어다 놓고 저장하세요)");
     }
     private string ProfilePath(string p) => Path.Combine(folder, p + ".json");
+    // Recently restored profiles first, then the rest A–Z. Shared by the combo and tray menu.
+    private IEnumerable<string> OrderedProfileNames()
+    {
+        var names=Directory.GetFiles(folder,"*.json").Select(Path.GetFileNameWithoutExtension).OfType<string>().ToList();
+        foreach(var n in settings.Recent.Where(names.Contains).Distinct()) yield return n;
+        foreach(var n in names.Where(n=>!settings.Recent.Contains(n)).OrderBy(n=>n,StringComparer.CurrentCultureIgnoreCase)) yield return n;
+    }
     // Repopulates the list without loading anything into the editor; keeps the edited profile selected.
     private void RefreshProfiles()
     {
@@ -830,10 +840,7 @@ public sealed partial class MainForm : Form
         {
             string? keep=loadedProfile ?? profiles.SelectedItem as string;
             profiles.Items.Clear();
-            // Most recently restored profiles first, the rest alphabetical.
-            var names=Directory.GetFiles(folder,"*.json").Select(Path.GetFileNameWithoutExtension).OfType<string>().ToList();
-            foreach(var n in settings.Recent.Where(names.Contains).Distinct()) profiles.Items.Add(n);
-            foreach(var n in names.Where(n=>!settings.Recent.Contains(n)).OrderBy(n=>n,StringComparer.CurrentCultureIgnoreCase)) profiles.Items.Add(n);
+            foreach(var n in OrderedProfileNames()) profiles.Items.Add(n);
             if(keep!=null && profiles.Items.Contains(keep)) profiles.SelectedItem=keep;
         }
         finally { suppressProfileLoad=false; }
