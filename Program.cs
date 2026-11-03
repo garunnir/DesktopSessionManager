@@ -16,7 +16,7 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         Updates.CleanupOldFiles();
         Vda.Initialize(MainForm.DataRoot);
-        Application.Run(new MainForm());
+        Application.Run(new MainForm(args.Contains("--windows-startup")));
     }
 }
 
@@ -38,6 +38,7 @@ public sealed class SavedWindow
     public string ProjectPath { get; set; } = ""; // VS Code folder/.code-workspace or Unity project root
     public string ProjectKind { get; set; } = ""; // legacy v2 compatibility
     public string PluginId { get; set; } = ""; // data-driven v3 extension ID
+    public bool ClaudeRemoteControl { get; set; }
     public List<string> OpenFiles { get; set; } = []; // plugins that reopen files instead of a project (Aseprite)
 }
 public sealed class Snapshot
@@ -213,7 +214,8 @@ public sealed partial class MainForm : Form
 #else
     private const string AppDataName="DesktopSessionManager";
 #endif
-    internal static readonly string DataRoot=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),AppDataName);
+    internal static readonly string DataRoot=AppContext.GetData("DesktopSessionManager.TestDataRoot") as string
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),AppDataName);
     private readonly string folder=Path.Combine(DataRoot,"Profiles");
     private readonly ProjectCache projectCache=new(Path.Combine(DataRoot,"project-cache.json"));
     private bool apiReady;
@@ -237,7 +239,7 @@ public sealed partial class MainForm : Form
     // Version the user declined at the startup prompt; they are not asked again for it.
     private static readonly string UpdateSkipFile=Path.Combine(DataRoot,"update-skip.txt");
 
-    public MainForm()
+    public MainForm(bool windowsStartup = false)
     {
         Text="Desktop Session Manager — 가상 데스크톱별 저장/복원";
         if(Updates.Enabled) Text+=$" v{Updates.Current}";
@@ -316,6 +318,7 @@ public sealed partial class MainForm : Form
         if(apiReady) RefreshWindows();
         updateLink.LinkClicked+=async (_,_)=>{if(latest!=null) await InstallUpdate(latest);};
         Shown+=async (_,_)=>await CheckForUpdate(false);
+        if (windowsStartup) Shown += async (_, _) => await RestoreLatestAtStartup();
     }
     // At startup (manual=false) failures only go to the log and a declined version is not offered again.
     private async Task CheckForUpdate(bool manual)
@@ -579,7 +582,7 @@ public sealed partial class MainForm : Form
             Item("프로젝트 경로 캐시 JSON 위치 열기",()=>ShowInExplorer(Path.Combine(DataRoot,"project-cache.json"))),
             Item("데이터 폴더 열기",()=>OpenFolder(DataRoot)),
             new ToolStripSeparator(),
-            Item("트레이 / 자동 저장 설정",UsabilitySettings),
+            Item("시작 / 트레이 / 자동 저장 설정",UsabilitySettings),
             Item("백업 / 자동 저장 복구",ShowHistory),
             Item("즐겨찾기 전환",()=>{if(loadedProfile is {} p){if(!settings.Favorites.Remove(p))settings.Favorites.Add(p);SaveSettings();}}),
             Item("종료",ExitApp)]);

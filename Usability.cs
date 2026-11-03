@@ -1,5 +1,6 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using System.Text.Json;
+using Microsoft.Win32;
 
 namespace DesktopSessionManager;
 
@@ -75,18 +76,49 @@ public sealed partial class MainForm
         AddGroup("즐겨찾기", settings.Favorites);
         AddGroup("최근 복원", settings.Recent);
         AddGroup("모든 프로필", OrderedProfileNames());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("시작 / 트레이 / 자동 저장 설정", null, (_, _) => { ShowMain(); UsabilitySettings(); });
         menu.Items.Add("종료", null, (_, _) => ExitApp());
         var old = tray.ContextMenuStrip; tray.ContextMenuStrip = menu; old?.Dispose();
     }
     private void UsabilitySettings()
     {
-        using var dialog = MakeDialog("트레이 및 자동 저장 설정", out var panel);
+        using var dialog = MakeDialog("시작 / 트레이 / 자동 저장 설정", out var panel);
+        var startup = new CheckBox { Text = "Windows 로그인 시 실행하고 최근 프로필 복원 (복원 후에도 트레이에 유지)", Checked = StartupEnabled(), AutoSize = true };
         var close = new CheckBox { Text = "창 닫기 시 트레이로 보내기 (종료 메뉴는 앱 종료)", Checked = settings.CloseToTray, AutoSize = true };
         var key = new CheckBox { Text = "Ctrl+Alt+F9: 최근 프로필 복원", Checked = settings.Hotkey, AutoSize = true };
         var minutes = new NumericUpDown { Minimum = 0, Maximum = 120, Value = Math.Clamp(settings.AutoSaveMinutes, 0, 120) };
-        panel.Controls.AddRange([close, key, new Label { Text = "자동 저장 간격(분), 0 = 끔. 별도 Recovery 파일에 편집 내용을 보관합니다.", AutoSize = true }, minutes]);
-        AddAccept(dialog, panel, () => { settings.CloseToTray = close.Checked; settings.Hotkey = key.Checked; settings.AutoSaveMinutes = (int)minutes.Value; SaveSettings(); ApplyHotkey(); return true; });
+        panel.Controls.AddRange([startup, close, key, new Label { Text = "자동 저장 간격(분), 0 = 끔. 별도 Recovery 파일에 편집 내용을 보관합니다.", AutoSize = true }, minutes]);
+        AddAccept(dialog, panel, () => { try { SetStartup(startup.Checked); } catch (Exception ex) { MessageBox.Show(dialog, ex.Message, "시작 프로그램 설정 실패"); return false; } settings.CloseToTray = close.Checked; settings.Hotkey = key.Checked; settings.AutoSaveMinutes = (int)minutes.Value; SaveSettings(); ApplyHotkey(); return true; });
         dialog.ShowDialog(this);
+    }
+    private const string StartupValue = "DesktopSessionManager";
+    private const string StartupKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private static bool StartupEnabled()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(StartupKey);
+        return key?.GetValue(StartupValue) is string;
+    }
+    private static void SetStartup(bool enabled)
+    {
+        using var key = Registry.CurrentUser.CreateSubKey(StartupKey) ?? throw new InvalidOperationException("Windows 시작 프로그램 설정을 열 수 없습니다.");
+        if (!enabled) { key.DeleteValue(StartupValue, false); return; }
+        string exe = Environment.ProcessPath ?? throw new InvalidOperationException("실행 파일 경로를 찾을 수 없습니다.");
+        if (string.Equals(Path.GetFileNameWithoutExtension(exe), "dotnet", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("배포된 EXE로 실행한 상태에서 설정하세요.");
+        key.SetValue(StartupValue, $"\"{exe}\" --windows-startup");
+    }
+    private async Task RestoreLatestAtStartup()
+    {
+        if (!apiReady) { Write("시작 시 복원 건너뜀: 가상 데스크톱 연결 불가"); return; }
+        // Same choice as the Ctrl+Alt+F9 hotkey: the most recently restored profile,
+        // falling back to the most recently saved one when nothing was restored yet.
+        string? profile = settings.Recent.FirstOrDefault(p => File.Exists(ProfilePath(p)))
+            ?? Directory.GetFiles(folder, "*.json").OrderByDescending(File.GetLastWriteTimeUtc).Select(Path.GetFileNameWithoutExtension).FirstOrDefault();
+        if (profile == null) { Write("시작 시 복원 건너뜀: 저장된 프로필 없음"); return; }
+        Write($"시작 시 복원: 최근 프로필 '{profile}'");
+        // Stay running after a successful restore so the tray icon and hotkey remain available.
+        await RestoreProfile(profile, true, exitOnSuccess: false);
     }
     private static Form MakeDialog(string title, out FlowLayoutPanel panel)
     {
@@ -125,6 +157,12 @@ public sealed partial class MainForm
         var exe = Field("실행 파일", copy.Path);
         var project = Field("프로젝트 경로", copy.ProjectPath);
         var files = Field("열 파일 (한 줄에 하나)", string.Join(Environment.NewLine, copy.OpenFiles), true);
+        var claudeRemote = new CheckBox { Text = "이 VS Code 프로젝트 복원 시 Claude Remote Control 새 세션 시작 (별도 터미널)", Checked = copy.ClaudeRemoteControl, AutoSize = true };
+        panel.Controls.Add(claudeRemote);
+        // Only VS Code supports this option; hide it for other apps instead of rejecting it on save.
+        bool IsVsCode() => pluginsCatalog.ForExe(exe.Text.Trim())?.Id == "vscode";
+        claudeRemote.Visible = IsVsCode();
+        exe.TextChanged += (_, _) => claudeRemote.Visible = IsVsCode();
         var browse = new Button { Text = "프로젝트 / 파일 선택", AutoSize = true }; panel.Controls.Add(browse);
         browse.Click += (_, _) =>
         {
@@ -145,6 +183,8 @@ public sealed partial class MainForm
         {
             copy.Path = exe.Text.Trim(); copy.ProjectPath = project.Text.Trim(); copy.OpenFiles = files.Lines.Select(x => x.Trim()).Where(x => x != "").Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             var plugin = pluginsCatalog.ForExe(copy.Path); copy.PluginId = plugin?.Id ?? copy.PluginId;
+            copy.ClaudeRemoteControl = claudeRemote.Checked && plugin?.Id == "vscode";
+            if (copy.ClaudeRemoteControl && !Directory.Exists(copy.ProjectPath)) { MessageBox.Show(dialog, "Claude Remote Control에는 VS Code의 프로젝트 폴더가 필요합니다. 워크스페이스 파일은 지원하지 않습니다."); return false; }
             if (copy.ProjectPath != "" && copy.OpenFiles.Count > 0) { MessageBox.Show(dialog, "프로젝트 또는 열 파일 중 한 방식만 지정하세요."); return false; }
             bool pathsChanged = copy.Path != original.Path || copy.ProjectPath != original.ProjectPath || !copy.OpenFiles.SequenceEqual(original.OpenFiles);
             if (pathsChanged && PathIssue(copy) is { Length: > 0 } error) { MessageBox.Show(dialog, error); return false; }
@@ -156,6 +196,7 @@ public sealed partial class MainForm
         int at = editing.FindIndex(w => ReferenceEquals(w, original) || w.Id == original.Id);
         if (at >= 0) editing[at] = copy;
         original.Path = copy.Path; original.ProjectPath = copy.ProjectPath; original.OpenFiles = copy.OpenFiles; original.PluginId = copy.PluginId; original.DesktopIndex = copy.DesktopIndex; original.Maximized = copy.Maximized; original.Minimized = copy.Minimized;
+        original.ClaudeRemoteControl = copy.ClaudeRemoteControl;
         if (at >= 0) editorDirty = true;
         FillEditor(); return true;
     }

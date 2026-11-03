@@ -1,6 +1,12 @@
 ﻿using DesktopSessionManager;
 using System.Text.Json;
 
+if (args.Length == 2 && args[0] == "--live-restore")
+{
+    LiveRestoreDiagnostics.Run(args[1]);
+    return;
+}
+
 int checks = 0;
 void Assert(bool condition, string label)
 {
@@ -8,6 +14,18 @@ void Assert(bool condition, string label)
     checks++;
     Console.WriteLine("PASS " + label);
 }
+string? electronMode = Environment.GetEnvironmentVariable("ELECTRON_RUN_AS_NODE");
+try
+{
+    Environment.SetEnvironmentVariable("ELECTRON_RUN_AS_NODE", "1");
+    var launch = AppLaunch.Create(@"C:\Code.exe", @"C:\work");
+    Assert(!launch.UseShellExecute && !launch.Environment.ContainsKey("ELECTRON_RUN_AS_NODE"), "GUI launches do not inherit Electron Node mode");
+    Assert(Environment.GetEnvironmentVariable("ELECTRON_RUN_AS_NODE") == "1", "GUI launch sanitization does not mutate the parent environment");
+    Assert(AppLaunch.Create(@"C:\App.lnk", @"C:\work").UseShellExecute, "Non-EXE targets keep shell launch even with Electron Node mode");
+    Environment.SetEnvironmentVariable("ELECTRON_RUN_AS_NODE", null);
+    Assert(AppLaunch.Create(@"C:\Code.exe", @"C:\work").UseShellExecute, "Launches use the shell (UAC, shortcuts) when Electron Node mode is not inherited");
+}
+finally { Environment.SetEnvironmentVariable("ELECTRON_RUN_AS_NODE", electronMode); }
 LiveWindow Live(int id, string project, string title = "same title") => new()
 {
     Handle = (IntPtr)id, ProcessId = (uint)id,

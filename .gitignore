@@ -1,6 +1,7 @@
 bin/
 obj/
 dist/
+debug-fixed*/
 *.user
 .vs/
 /VirtualDesktopAccessor.dll

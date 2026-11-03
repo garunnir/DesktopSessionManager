@@ -78,3 +78,11 @@ Aseprite는 창 제목에 현재 탭 하나만 보여 주므로, 열린 파일 �
 개발 검증: `dotnet run --project tests/DesktopSessionManager.Tests.csproj`
 
 이 검증은 프로필 호환성, 보수적인 창 판별, 선택·중단 정책, 안전한 저장, 백업과 복구를 확인합니다. 실제 앱 실행·가상 데스크톱 이동·단축키 충돌·모니터 연결/배율 변경은 Windows에서 별도로 확인해야 합니다.
+
+Windows 로그인 시 최근 프로필(Ctrl+Alt+F9와 같은 기준: 마지막으로 복원한 프로필, 없으면 마지막으로 저장한 프로필)을 자동 복원하려면, 배포된 EXE에서 **파일 > 시작 / 트레이 / 자동 저장 설정**(트레이 아이콘 우클릭 메뉴에도 있음)의 첫 번째 옵션을 켜세요. 실행 파일을 옮긴 뒤에는 다시 설정해야 합니다. 저장된 프로필이 없거나 가상 데스크톱 연결이 불가하면 복원하지 않습니다. 시작 시 복원은 모두 성공해도 앱을 종료하지 않고 트레이와 단축키를 유지합니다.
+
+VS Code 프로젝트 폴더 항목의 **선택 편집**에서 Claude Remote Control 옵션을 켜고 프로필을 저장하면, 전체 복원 시 별도 PowerShell 창에서 `claude remote-control`을 실행합니다. Claude Code 설치와 로그인, Remote Control 사용 권한 및 최초 확인이 필요합니다. 세션 연결 여부와 오류는 해당 터미널에서 확인하세요. 같은 앱 실행 중 같은 폴더에 중복 터미널을 열지 않지만 앱을 다시 실행한 경우 기존 세션을 감지하지 않습니다. 배치만 복원할 때는 실행하지 않으며 `.code-workspace` 파일은 지원하지 않습니다.
+
+복원으로 실행하는 앱에는 VS Code 확장 호스트의 `ELECTRON_RUN_AS_NODE` 환경 변수를 전달하지 않습니다(이 변수가 있을 때만 셸을 거치지 않고 EXE를 직접 실행하며, 관리자 권한이 필요하면 셸 실행으로 다시 시도합니다). 프로그램이 오류로 종료하면 종료 코드를 표시합니다. Claude는 별도 터미널의 단일 세션으로 실행되며, 연결 진단 로그는 앱 데이터 폴더의 `Logs/claude-remote-*.log`에 남습니다.
+
+실제 복원 진단: `dotnet run --project tests/DesktopSessionManager.Tests.csproj -- --live-restore <프로필.json>`은 별도 앱 데이터로 Remote Control을 설정한 VS Code 항목 하나를 실제 복원합니다. 이 명령은 VS Code 창을 열거나 이동하고 Claude 세션을 시작하므로, 일반 테스트와 구분해 명시적으로 실행하세요.
