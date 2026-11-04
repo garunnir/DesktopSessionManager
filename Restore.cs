@@ -50,7 +50,7 @@ public sealed partial class MainForm
                 if (preview.ShowDialog(this) != DialogResult.OK) return;
                 data.Windows = list.CheckedItems.Cast<ListViewItem>().Select(x => (SavedWindow)x.Tag!).ToList(); layoutOnly = mode.Checked;
             }
-            settings.Recent.Remove(p); settings.Recent.Insert(0, p); settings.Recent = settings.Recent.Take(10).ToList(); SaveSettings();
+            MarkRecent(p);
             await RunRestore(data.Windows, layoutOnly, exitOnSuccess);
         }
         catch (Exception ex) { Write("복원 실패: " + ex.Message); MessageBox.Show(this, ex.Message, "복원 실패"); }

@@ -74,7 +74,7 @@ public sealed partial class MainForm
             menu.Items.Add(group);
         }
         AddGroup("즐겨찾기", settings.Favorites);
-        AddGroup("최근 복원", settings.Recent);
+        AddGroup("최근 사용", settings.Recent);
         AddGroup("모든 프로필", OrderedProfileNames());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("시작 / 트레이 / 자동 저장 설정", null, (_, _) => { ShowMain(); UsabilitySettings(); });

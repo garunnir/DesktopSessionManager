@@ -842,7 +842,13 @@ public sealed partial class MainForm : Form
         Write($"{plugin.Name} 프로젝트 지정: {chosen} (이 창을 왼쪽 프로필에 끌어다 놓고 저장하세요)");
     }
     private string ProfilePath(string p) => Path.Combine(folder, p + ".json");
-    // Recently restored profiles first, then the rest A–Z. Shared by the combo and tray menu.
+    // Restoring or saving a profile makes it the startup/hotkey target.
+    private void MarkRecent(string p)
+    {
+        settings.Recent.RemoveAll(x => string.Equals(x, p, StringComparison.OrdinalIgnoreCase));
+        settings.Recent.Insert(0, p); settings.Recent = settings.Recent.Take(10).ToList(); SaveSettings();
+    }
+    // Recently restored or saved profiles first, then the rest A–Z. Shared by the combo and tray menu.
     private IEnumerable<string> OrderedProfileNames()
     {
         var names=Directory.GetFiles(folder,"*.json").Select(Path.GetFileNameWithoutExtension).OfType<string>().ToList();
@@ -890,6 +896,7 @@ public sealed partial class MainForm : Form
         {
             var data=CurrentSnapshot(p);
             ProfileStore.Write(path,data,true);
+            MarkRecent(p);
             layouts=data.Layouts;
             RebuildTray();
             loadedProfile=p; nameText=p; editorDirty=false;
