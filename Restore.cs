@@ -155,6 +155,7 @@ public sealed partial class MainForm
                 foreach (var arg in plugin!.LaunchArguments)
                     if (arg.Contains("{file}")) foreach (var file in target.OpenFiles) psi.ArgumentList.Add(arg.Replace("{file}", file));
                     else psi.ArgumentList.Add(arg);
+            if (plugin?.Id == "unity" && target.ProjectPath != "") SetAsideUnitySceneBackups(target.ProjectPath, Report);
             var before = Scanner.Scan().Select(x => x.Handle).ToHashSet();
             token.ThrowIfCancellationRequested();
             Report("프로그램 실행 및 창 대기 중");
@@ -207,6 +208,37 @@ public sealed partial class MainForm
         }
         Report("복원 완료");
         return "완료";
+    }
+
+    // After an unclean shutdown (e.g. Windows restart) Unity finds Temp/__Backupscenes and
+    // blocks startup with a scene recovery prompt. Move the backups out of the project so
+    // Unity starts unattended; they stay in the app data folder (rename .backup to .unity to use).
+    private static void SetAsideUnitySceneBackups(string projectPath, Action<string> report)
+    {
+        try
+        {
+            string temp = Path.Combine(projectPath, "Temp");
+            string backups = Path.Combine(temp, "__Backupscenes");
+            if (!Directory.Exists(backups)) return;
+            // A running editor keeps its lock file open; never touch its Temp folder.
+            string lockFile = Path.Combine(temp, "UnityLockfile");
+            if (File.Exists(lockFile))
+                try { using var _ = new FileStream(lockFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None); }
+                catch (IOException) { return; }
+            string name = Path.GetFileName(Path.GetFullPath(projectPath).TrimEnd('\\', '/'));
+            string destination = Path.Combine(DataRoot, "UnitySceneBackups", $"{name}-{DateTime.Now:yyyyMMdd-HHmmss}");
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            // Directory.Move fails across volumes (project on Z:, app data on C:), so copy then delete.
+            foreach (var file in Directory.GetFiles(backups, "*", SearchOption.AllDirectories))
+            {
+                string to = Path.Combine(destination, Path.GetRelativePath(backups, file));
+                Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+                File.Copy(file, to);
+            }
+            Directory.Delete(backups, true);
+            report("Unity 씬 백업 보관: " + destination);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { report("Unity 씬 백업 보관 실패: " + ex.Message); }
     }
 
     private static readonly Dictionary<string, Process> ClaudeSessions = new(StringComparer.OrdinalIgnoreCase);
