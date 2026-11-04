@@ -193,8 +193,10 @@ internal static class Scanner
 public sealed partial class MainForm : Form
 {
     private readonly ListView windows = new() { Dock=DockStyle.Fill, View=View.Details, CheckBoxes=true, FullRowSelect=true, GridLines=true };
-    private readonly ComboBox profiles = new() { DropDownStyle=ComboBoxStyle.DropDownList, Width=225 };
-    private readonly TextBox name = new() { Width=150, PlaceholderText="프로필 이름" };
+    // Picks a saved profile and is also the name field: typing names a new profile or saves under another name.
+    private readonly ComboBox profiles = new() { DropDownStyle=ComboBoxStyle.DropDown, Width=240 };
+    // What the user typed in the profile box; picking from the list overwrites the box text, this keeps the typed name.
+    private string nameText="";
     private readonly CheckBox createDesktops = new() { Text="부족한 가상 데스크톱 생성 (선택)", AutoSize=true };
     private readonly TextBox log = new() { Multiline=true, ReadOnly=true, ScrollBars=ScrollBars.Vertical, Dock=DockStyle.Fill };
     private readonly Button restore = new() { Text="선택한 프로필 복원", Width=150 };
@@ -232,7 +234,7 @@ public sealed partial class MainForm : Form
     private readonly Button saveProfile = new() { Text="프로필 저장", Width=100 };
     private readonly List<SavedWindow> editing=[];
     private string? loadedProfile;
-    private bool editorDirty, suppressProfileLoad;
+    private bool editorDirty;
     private readonly LinkLabel updateLink = new() { AutoSize=true, Visible=false, Margin=new Padding(12,7,3,0) };
     private Updates.Release? latest;
     private bool updating;
@@ -314,7 +316,8 @@ public sealed partial class MainForm : Form
         // combo falls back to alphabetical order until the next restore in this session.
         InitializeUsability();
         RefreshProfiles();
-        if(profiles.Items.Count>0) profiles.SelectedIndex=0; else UpdateEditorHeader();
+        // Index 0 is the newest profile; with none saved yet only the "+ 새 프로필" entry exists.
+        if(profiles.Items.Count>1) LoadIntoEditor(profiles.Items[0] as string); else UpdateEditorHeader();
         if(apiReady) RefreshWindows();
         updateLink.LinkClicked+=async (_,_)=>{if(latest!=null) await InstallUpdate(latest);};
         Shown+=async (_,_)=>await CheckForUpdate(false);
@@ -622,9 +625,10 @@ public sealed partial class MainForm : Form
     private Control BuildProfileEditor()
     {
         editorHeader.Font=new System.Drawing.Font(Font,System.Drawing.FontStyle.Bold);
-        var newProfile=new Button{Text="새 프로필",Width=90};
+        // Choosing, naming, saving and restoring a profile all sit in one row; a new profile is
+        // started from the "+ 새 프로필" entry at the end of the list instead of a separate button.
         var top=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Padding=new Padding(4)};
-        top.Controls.AddRange([new Label{Text="프로필:",AutoSize=true,Margin=new Padding(3,7,3,0)},profiles,newProfile,restore,createDesktops,liveToggle,updateLink]);
+        top.Controls.AddRange([new Label{Text="프로필:",AutoSize=true,Margin=new Padding(3,7,3,0)},profiles,saveProfile,restore,createDesktops,liveToggle,updateLink]);
         liveToggle.Click+=(_,_)=>{ShowLiveWindows(livePanel.Panel2Collapsed);settings.ShowLiveWindows=!livePanel.Panel2Collapsed;SaveSettings();};
         var hint=new Label{Text="[현재 창 추가]로 열린 창 목록을 펼쳐, 창을 데스크톱 카드의 화면 위에 끌어다 놓으세요. 놓은 데스크톱·모니터에 배치됩니다. 카드 제목을 끌면 데스크톱 순서가 바뀝니다.",
             AutoSize=true,ForeColor=System.Drawing.SystemColors.GrayText,Margin=new Padding(8,0,8,6),MaximumSize=new System.Drawing.Size(560,0)};
@@ -636,7 +640,7 @@ public sealed partial class MainForm : Form
         var editSaved=new Button{Text="선택 편집",Width=90}; editSaved.Click+=(_,_)=>EditSelected();
         var refreshSaved=new Button{Text="현재 배치로 갱신",Width=135}; refreshSaved.Click+=(_,_)=>UpdateFromCurrent();
         editor.DoubleClick+=(_,_)=>EditSelected();
-        bottom.Controls.AddRange([editSaved,refreshSaved,new Label{Text="이름:",AutoSize=true,Margin=new Padding(3,7,3,0)},name,saveProfile,remove,openJson]);
+        bottom.Controls.AddRange([editSaved,refreshSaved,remove,openJson]);
         var panel=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5};
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent,100)); panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -647,10 +651,13 @@ public sealed partial class MainForm : Form
         views.TabPages.AddRange([boardPage,listPage]);
         panel.Controls.Add(editorHeader,0,0); panel.Controls.Add(top,0,1); panel.Controls.Add(hint,0,2); panel.Controls.Add(views,0,3); panel.Controls.Add(bottom,0,4);
         panel.SizeChanged+=(_,_)=>hint.MaximumSize=new System.Drawing.Size(Math.Max(200,panel.ClientSize.Width-20),0);
-        profiles.SelectedIndexChanged+=(_,_)=>OnProfileSelected();
-        newProfile.Click+=(_,_)=>NewProfile(); remove.Click+=(_,_)=>RemoveFromEditor();
+        // Committed fires only for a pick by the user; the box text is updated after it, hence BeginInvoke.
+        profiles.SelectionChangeCommitted+=(_,_)=>BeginInvoke(OnProfileSelected);
+        // Grey hint shown while the box is empty (new profile); WinForms ComboBox has no PlaceholderText.
+        profiles.HandleCreated+=(_,_)=>SendMessage(profiles.Handle,0x1703 /* CB_SETCUEBANNER */,IntPtr.Zero,"새 프로필 이름 입력");
+        profiles.TextUpdate+=(_,_)=>{nameText=profiles.Text;UpdateEditorHeader();};
+        remove.Click+=(_,_)=>RemoveFromEditor();
         saveProfile.Click+=(_,_)=>SaveEditedProfile(); openJson.Click+=(_,_)=>OpenProfileJson();
-        name.TextChanged+=(_,_)=>UpdateEditorHeader();
         EnableWindowDrop(panel,panel);
         windows.ItemDrag+=(_,e)=>
         {
@@ -741,38 +748,45 @@ public sealed partial class MainForm : Form
     private void UpdateEditorHeader()
     {
         string title=loadedProfile ?? "새 프로필";
-        editorHeader.Text=$"프로필 편집 — {title} · 창 {editing.Count}개"+(editorDirty || name.Text.Trim()!=(loadedProfile ?? "") ? " (저장 안 됨)" : "");
+        editorHeader.Text=$"프로필 편집 — {title} · 창 {editing.Count}개"+(editorDirty || nameText.Trim()!=(loadedProfile ?? "") ? " (저장 안 됨)" : "");
     }
-    private bool ConfirmDiscard() => !(editorDirty || name.Text.Trim()!=(loadedProfile ?? ""))
+    private bool ConfirmDiscard() => !(editorDirty || nameText.Trim()!=(loadedProfile ?? ""))
         || MessageBox.Show(this,"편집 중인 프로필에 저장하지 않은 변경이 있습니다. 버리고 계속할까요?","프로필 편집",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)==DialogResult.Yes;
     private void OnProfileSelected()
     {
-        if(suppressProfileLoad) return;
-        string? p=profiles.SelectedItem as string;
-        if(p==loadedProfile) return;
-        if(!ConfirmDiscard()) {SelectProfileQuietly(loadedProfile);return;}
+        if(profiles.SelectedItem==NewProfileEntry) {NewProfile();return;}
+        if(profiles.SelectedItem is not string p) return;
+        // Picking the profile being edited again just drops a typed, unsaved name.
+        if(p==loadedProfile) {nameText=p;SyncProfileBox();return;}
+        if(!ConfirmDiscard()) {SyncProfileBox();return;}
         LoadIntoEditor(p);
     }
-    private void SelectProfileQuietly(string? p)
+    // Shows the edited profile as selected and the typed name as the box text.
+    private void SyncProfileBox()
     {
-        suppressProfileLoad=true;
-        try { if(p!=null && profiles.Items.Contains(p)) profiles.SelectedItem=p; else profiles.SelectedIndex=-1; }
-        finally { suppressProfileLoad=false; }
+        if(loadedProfile!=null && profiles.Items.Contains(loadedProfile)) profiles.SelectedItem=loadedProfile; else profiles.SelectedIndex=-1;
+        if(profiles.Text!=nameText) profiles.Text=nameText;
+        UpdateEditorHeader();
     }
     private void LoadIntoEditor(string? p)
     {
         Snapshot? data=p==null ? null : ReadProfile(p);
-        if(p!=null && data==null) {SelectProfileQuietly(loadedProfile);return;}
+        if(p!=null && data==null) {SyncProfileBox();return;}
         editing.Clear();
         layouts=data?.Layouts ?? [];
         if(data!=null) editing.AddRange(ResolveLayout(data));
-        loadedProfile=p; editorDirty=false; name.Text=p ?? "";
-        FillEditor();
+        loadedProfile=p; editorDirty=false; nameText=p ?? "";
+        SyncProfileBox(); FillEditor();
     }
+    [System.Runtime.InteropServices.DllImport("user32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern IntPtr SendMessage(IntPtr hwnd,int msg,IntPtr wParam,string lParam);
+    // Last entry of the profile list; picking it (or Ctrl+N) starts an empty profile.
+    private static readonly object NewProfileEntry=new NewProfileItem();
+    private sealed class NewProfileItem { public override string ToString()=>"+ 새 프로필"; }
     private void NewProfile()
     {
-        if(!ConfirmDiscard()) return;
-        SelectProfileQuietly(null); LoadIntoEditor(null); ShowLiveWindows(true); name.Focus();
+        if(!ConfirmDiscard()) {SyncProfileBox();return;}
+        LoadIntoEditor(null); ShowLiveWindows(true); profiles.Focus();
     }
     private void ShowLiveWindows(bool show)
     {
@@ -838,15 +852,15 @@ public sealed partial class MainForm : Form
     // Repopulates the list without loading anything into the editor; keeps the edited profile selected.
     private void RefreshProfiles()
     {
-        suppressProfileLoad=true;
+        profiles.BeginUpdate();
         try
         {
-            string? keep=loadedProfile ?? profiles.SelectedItem as string;
             profiles.Items.Clear();
             foreach(var n in OrderedProfileNames()) profiles.Items.Add(n);
-            if(keep!=null && profiles.Items.Contains(keep)) profiles.SelectedItem=keep;
+            profiles.Items.Add(NewProfileEntry);
         }
-        finally { suppressProfileLoad=false; }
+        finally { profiles.EndUpdate(); }
+        SyncProfileBox();
     }
     private Snapshot? ReadProfile(string p)
     {
@@ -859,9 +873,9 @@ public sealed partial class MainForm : Form
     private void SaveEditedProfile()
     {
         if(!saveProfile.Enabled) return; // Ctrl+S while the virtual desktop API is unavailable
-        string p=name.Text.Trim();
+        string p=nameText.Trim();
         if (string.IsNullOrWhiteSpace(p) || p.Length>60 || p.IndexOfAny(Path.GetInvalidFileNameChars())>=0 || p.EndsWith('.') || p.EndsWith(' '))
-        { MessageBox.Show("프로필 이름(1~60자)을 입력하세요. 파일명에 사용할 수 없는 문자는 제외하세요."); name.Focus(); return; }
+        { MessageBox.Show("프로필 이름(1~60자)을 입력하세요. 파일명에 사용할 수 없는 문자는 제외하세요."); profiles.Focus(); return; }
         var picked=editing.ToList();
         if(picked.Count==0) { MessageBox.Show("프로필에 창이 없습니다. [현재 창 추가]를 눌러 열린 창을 끌어다 놓으세요."); return; }
         var missing=picked.Where(MissingProject).ToList();
@@ -878,7 +892,7 @@ public sealed partial class MainForm : Form
             ProfileStore.Write(path,data,true);
             layouts=data.Layouts;
             RebuildTray();
-            loadedProfile=p; editorDirty=false;
+            loadedProfile=p; nameText=p; editorDirty=false;
             RefreshProfiles(); UpdateEditorHeader();
             foreach(var w in picked) projectCache.Remember(PluginIdOf(w),w.ProjectPath);
             SaveProjectCache();

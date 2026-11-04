@@ -7,7 +7,7 @@ public sealed partial class MainForm
     private async Task RestoreProfile(string? profile = null, bool quick = false, bool exitOnSuccess = true)
     {
         if (restoring || !apiReady) return;
-        string? p = profile ?? profiles.SelectedItem as string;
+        string? p = profile ?? loadedProfile;
         if (p == null) { MessageBox.Show(this, "복원할 프로필을 선택하세요."); return; }
         if (ReadProfile(p) is not { } data) return;
         data.Windows = ResolveLayout(data);
