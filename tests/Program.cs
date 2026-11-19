@@ -62,6 +62,35 @@ using (var cancellation = new CancellationTokenSource())
     catch (OperationCanceledException) { }
     Assert(visited.SequenceEqual(new[] { target.Id }), "cancellation prevents every subsequent target");
 }
+// A gate proves overlap without relying on timing or launching real applications.
+var releaseParallel = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+var fourStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+int activeRestores = 0, peakRestores = 0, startedRestores = 0;
+var parallelTargets = Enumerable.Range(0, 6).Select(n => new SavedWindow
+    { Path = @"C:\Code.exe", ProjectPath = @"C:\project" + n }).ToList();
+var parallelBatch = RestorePolicy.RunBatch(parallelTargets, async w =>
+{
+    int active = Interlocked.Increment(ref activeRestores);
+    peakRestores = Math.Max(peakRestores, active);
+    if (Interlocked.Increment(ref startedRestores) == 4) fourStarted.TrySetResult();
+    await releaseParallel.Task;
+    Interlocked.Decrement(ref activeRestores);
+}, CancellationToken.None);
+try
+{
+    await fourStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    Assert(startedRestores == 4 && peakRestores == 4, "independent projects overlap with a four-restore limit");
+}
+finally { releaseParallel.TrySetResult(); }
+await parallelBatch;
+Assert(startedRestores == 6, "queued restores complete after parallel slots open");
+int sameSessionActive = 0;
+await RestorePolicy.RunBatch([target, target], async w =>
+{
+    Assert(Interlocked.Increment(ref sameSessionActive) == 1, "same session is restored serially");
+    await Task.Delay(10);
+    Interlocked.Decrement(ref sameSessionActive);
+}, CancellationToken.None);
 string root = Path.Combine(Path.Combine(Directory.GetCurrentDirectory(), "tests"), "dsm-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
 try

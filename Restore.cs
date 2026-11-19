@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace DesktopSessionManager;
 
@@ -70,13 +71,14 @@ public sealed partial class MainForm
         var quit = new Button { Text = "프로그램 종료", AutoSize = true }; panel.Controls.Add(quit);
         bool running = false, exitAfter = false;
         var rows = new List<(SavedWindow Target, bool Failed)>();
-        var reserved = new HashSet<IntPtr>();
+        var completed = new HashSet<SavedWindow>();
+        var reserved = new ConcurrentDictionary<IntPtr, byte>();
         async Task Execute(List<SavedWindow> batch)
         {
             bool allOk = false;
             running = true; retry.Enabled = edit.Enabled = close.Enabled = false; cancel.Enabled = true;
             restoreCancellation?.Dispose(); restoreCancellation = new CancellationTokenSource(); var token = restoreCancellation.Token;
-            failedWindows.Clear(); results.Items.Clear(); rows.Clear();
+            failedWindows.Clear(); results.Items.Clear(); rows.Clear(); completed.Clear();
             try
             {
                 int count = Native.GetDesktopCount();
@@ -99,6 +101,7 @@ public sealed partial class MainForm
                     catch (Exception ex) { result = "실행 / 복원 오류: " + ex.Message; }
                     bool failed = result != "완료" && result != "고정 창 건너뜀";
                     if (failed) failedWindows.Add(w);
+                    completed.Add(w);
                     rows.Add((w, failed)); results.Items.Add($"{w.Title}: {result}"); Write($"{w.Title}: {result}");
                 }, token);
                 status.Text = $"완료 {batch.Count - failedWindows.Count}/{batch.Count} · 실패 {failedWindows.Count}";
@@ -106,7 +109,7 @@ public sealed partial class MainForm
             }
             catch (OperationCanceledException)
             {
-                foreach (var w in batch.Skip(rows.Count)) { failedWindows.Add(w); rows.Add((w, true)); results.Items.Add(w.Title + ": 중단됨 (재시도 가능)"); }
+                foreach (var w in batch.Where(w => !completed.Contains(w))) { failedWindows.Add(w); rows.Add((w, true)); results.Items.Add(w.Title + ": 중단됨 (재시도 가능)"); }
                 status.Text = "중단됨. 이미 실행하거나 이동한 창은 유지됩니다.";
             }
             finally { running = false; cancel.Enabled = false; retry.Enabled = edit.Enabled = failedWindows.Count > 0; close.Enabled = true; }
@@ -127,7 +130,7 @@ public sealed partial class MainForm
         await Task.CompletedTask;
     }
 
-    private async Task<string> RestoreOne(SavedWindow target, bool layoutOnly, HashSet<IntPtr> reserved, CancellationToken token, IProgress<string>? phase = null)
+    private async Task<string> RestoreOne(SavedWindow target, bool layoutOnly, ConcurrentDictionary<IntPtr, byte> reserved, CancellationToken token, IProgress<string>? phase = null)
     {
         void Report(string value)
         {
@@ -139,7 +142,7 @@ public sealed partial class MainForm
         if (target.Pinned) return "고정 창 건너뜀";
         if (!target.AllDesktops && (target.DesktopIndex < 0 || target.DesktopIndex >= Native.GetDesktopCount())) return "대상 데스크톱 없음";
         Report("현재 창 검색 중");
-        var matches = WindowMatcher.Candidates(ScanIdentified().Where(x => !reserved.Contains(x.Handle)), target);
+        var matches = WindowMatcher.Candidates(ScanIdentified().Where(x => !reserved.ContainsKey(x.Handle)), target);
         Report($"현재 창 검색 완료: {matches.Count}개 일치");
         var action = RestorePolicy.Decide(matches.Count, layoutOnly);
         if (action == RestoreAction.Ambiguous) return "연결 모호: 같은 프로젝트의 중복 창을 확인하세요";
@@ -165,7 +168,7 @@ public sealed partial class MainForm
             for (int i = 0; i < attempts && candidate == null; i++)
             {
                 await Task.Delay(500, token);
-                var current = ScanIdentified().Where(x => !reserved.Contains(x.Handle)).ToList();
+                var current = ScanIdentified().Where(x => !reserved.ContainsKey(x.Handle)).ToList();
                 Report($"창 대기 {i + 1}/{attempts}: 검색 {current.Count}개");
                 candidate = WindowMatcher.Unique(current, target);
                 if (candidate == null && launched is { HasExited: true } && launched.ExitCode != 0)
@@ -182,32 +185,41 @@ public sealed partial class MainForm
         if (candidate == null || !Native.IsWindow(candidate.Handle)) return "대상 창이 닫힘";
         if (candidate.Data.Pinned) return "현재 고정된 창: 이동 보류";
         if (candidate.Data.AllDesktops && !target.AllDesktops) return "모든 데스크톱 창: 대상 데스크톱 이동 불가";
-        Report("데스크톱 이동 중");
-        if (!target.AllDesktops && Native.MoveWindowToDesktopNumber(candidate.Handle, target.DesktopIndex) == -1) return "데스크톱 이동 실패";
-        Report("창 위치 읽는 중");
-        token.ThrowIfCancellationRequested();
-        var wp = Native.WINDOWPLACEMENT.Init();
-        if (!Native.GetWindowPlacement(candidate.Handle, ref wp)) return "창 위치 읽기 실패";
-        var rect = ClampToScreens(target);
-        wp.rcNormalPosition = new Native.RECT { Left = rect.Left, Top = rect.Top, Right = rect.Right, Bottom = rect.Bottom };
-        wp.showCmd = target.Maximized ? 3 : target.Minimized ? 2 : 1;
-        token.ThrowIfCancellationRequested();
-        Report("창 위치 적용 중");
-        if (!Native.SetWindowPlacement(candidate.Handle, ref wp)) return "창 위치 이동 실패";
-        Report("창 위치 적용 완료");
-        reserved.Add(candidate.Handle);
-        if (!layoutOnly && target.ClaudeRemoteControl)
+        if (!reserved.TryAdd(candidate.Handle, 0)) return "Window already claimed by another restore";
+        bool placed = false;
+        try
         {
-            Report("Claude Remote Control 터미널 실행 중");
-            // Shell startup can block (for example while Windows resolves a network drive).
-            // Do not block the UI or the remaining restore indefinitely.
-            string? error;
-            try { error = await Task.Run(() => StartClaudeRemoteControl(target)).WaitAsync(TimeSpan.FromSeconds(15), token); }
-            catch (TimeoutException) { return "Claude Remote Control 시작 대기 시간 초과 (나중에 실행될 수 있음)"; }
-            if (error != null) return "Claude Remote Control 시작 실패: " + error;
+            Report("데스크톱 이동 중");
+            if (!target.AllDesktops && Native.MoveWindowToDesktopNumber(candidate.Handle, target.DesktopIndex) == -1) return "데스크톱 이동 실패";
+            Report("창 위치 읽는 중");
+            token.ThrowIfCancellationRequested();
+            var wp = Native.WINDOWPLACEMENT.Init();
+            if (!Native.GetWindowPlacement(candidate.Handle, ref wp)) return "창 위치 읽기 실패";
+            var rect = ClampToScreens(target);
+            wp.rcNormalPosition = new Native.RECT { Left = rect.Left, Top = rect.Top, Right = rect.Right, Bottom = rect.Bottom };
+            wp.showCmd = target.Maximized ? 3 : target.Minimized ? 2 : 1;
+            token.ThrowIfCancellationRequested();
+            Report("창 위치 적용 중");
+            if (!Native.SetWindowPlacement(candidate.Handle, ref wp)) return "창 위치 이동 실패";
+            Report("창 위치 적용 완료");
+            placed = true;
+            if (!layoutOnly && target.ClaudeRemoteControl)
+            {
+                Report("Claude Remote Control 터미널 실행 중");
+                // Shell startup can block (for example while Windows resolves a network drive).
+                // Do not block the UI or the remaining restore indefinitely.
+                string? error;
+                try { error = await Task.Run(() => StartClaudeRemoteControl(target)).WaitAsync(TimeSpan.FromSeconds(15), token); }
+                catch (TimeoutException) { return "Claude Remote Control 시작 대기 시간 초과 (나중에 실행될 수 있음)"; }
+                if (error != null) return "Claude Remote Control 시작 실패: " + error;
+            }
+            Report("복원 완료");
+            return "완료";
         }
-        Report("복원 완료");
-        return "완료";
+        finally
+        {
+            if (!placed) reserved.TryRemove(candidate.Handle, out _);
+        }
     }
 
     // After an unclean shutdown (e.g. Windows restart) Unity finds Temp/__Backupscenes and
