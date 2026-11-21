@@ -138,6 +138,12 @@ string godotRoot = Path.Combine(Path.GetTempPath(), "dsm-label-" + Guid.NewGuid(
 Directory.CreateDirectory(godotRoot);
 try
 {
+    var blender = PluginCatalog.Parse(File.ReadAllText(Path.Combine("plugins", "blender.json")));
+    string blendPath = Path.Combine(godotRoot, "Scene.blend");
+    File.WriteAllText(blendPath, "");
+    Assert(ProjectDetector.IsValid(blendPath, blender) && !ProjectDetector.IsValid(godotRoot, blender), "Blender projects require a blend file");
+    var blendWindow = new LiveWindow { Handle = IntPtr.Zero, ProcessId = 0, Data = new SavedWindow { Title = $"Blender* [{blendPath}]" } };
+    Assert(new ProjectDetector(new ProjectCache(Path.Combine(godotRoot, "cache.json"))).Detect(blendWindow, blender) == blendPath, "Blender detects the current file from its title");
     File.WriteAllLines(Path.Combine(godotRoot, "project.godot"), ["[application]", "config/name=\"Project\""]);
     Assert(ProjectDetector.Label(godotRoot, new AppPlugin { ProjectPicker = "godot-folder" }) == "Project", "Godot title uses config name");
     Assert(ProjectDetector.Label(godotRoot, new AppPlugin { ProjectPicker = "workspace-or-folder" }) == "project-beta", "VS Code title uses folder name of a Godot project");

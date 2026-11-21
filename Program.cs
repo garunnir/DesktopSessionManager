@@ -815,6 +815,12 @@ public sealed partial class MainForm : Form
             return;
         }
         string chosen="";
+        if(plugin.ProjectPicker=="blender-file")
+        {
+            using var file=new OpenFileDialog{Filter="Blender 프로젝트 (*.blend)|*.blend",Title="Blender 프로젝트 파일 선택"};
+            if(file.ShowDialog()!=DialogResult.OK)return;
+            chosen=file.FileName;
+        }
         if(plugin.ProjectPicker=="workspace-or-folder")
         {
             var choice=MessageBox.Show(".code-workspace 파일을 지정하려면 [예], 프로젝트 폴더를 지정하려면 [아니오]를 선택하세요.","작업 영역 선택",MessageBoxButtons.YesNoCancel);

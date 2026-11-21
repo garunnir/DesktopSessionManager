@@ -34,7 +34,7 @@ internal sealed class PluginCatalog
         if (string.IsNullOrWhiteSpace(p.Name) || p.Name.Length > 100) return "프로그램 이름은 1~100자로 지정하세요.";
         if (p.ExecutableNames.Count == 0 || p.ExecutableNames.Any(n => string.IsNullOrWhiteSpace(n) || Path.GetFileName(n) != n || !n.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)))
             return "실행 파일명은 경로 없이 EXE 이름으로 지정하세요. (예: Code.exe)";
-        if (p.ProjectPicker is not ("folder" or "workspace-or-folder" or "unity-folder" or "godot-folder" or "aseprite-files")) return "지원하지 않는 프로젝트 선택 방식입니다.";
+        if (p.ProjectPicker is not ("folder" or "workspace-or-folder" or "unity-folder" or "godot-folder" or "blender-file" or "aseprite-files")) return "지원하지 않는 프로젝트 선택 방식입니다.";
         string variable = p.OpensFiles ? "{file}" : "{projectPath}";
         if (p.LaunchArguments.Count > 20 || p.LaunchArguments.Any(a => a.Length > 4096 || a.Replace(variable, "").IndexOfAny(['{', '}']) >= 0))
             return $"인자는 20개 이내이며 {variable} 변수만 사용할 수 있습니다.";
@@ -129,6 +129,7 @@ internal sealed class ProjectDetector(ProjectCache cache)
         if (plugin.ProjectPicker == "unity-folder") return Directory.Exists(Path.Combine(path, "Assets")) && Directory.Exists(Path.Combine(path, "ProjectSettings"));
         if (plugin.ProjectPicker == "godot-folder") return File.Exists(Path.Combine(path, "project.godot"));
         if (plugin.ProjectPicker == "workspace-or-folder") return Directory.Exists(path) || (File.Exists(path) && path.EndsWith(".code-workspace", StringComparison.OrdinalIgnoreCase));
+        if (plugin.ProjectPicker == "blender-file") return File.Exists(path) && path.EndsWith(".blend", StringComparison.OrdinalIgnoreCase);
         return Directory.Exists(path);
     }
 
@@ -152,6 +153,13 @@ internal sealed class ProjectDetector(ProjectCache cache)
 
     public string? Detect(LiveWindow w, AppPlugin plugin)
     {
+        if (plugin.ProjectPicker == "blender-file")
+        {
+            // Blender updates the bracketed absolute filename when another file is opened.
+            var titlePath = Regex.Match(w.Data.Title, @"\[(.+\.blend)\]", RegexOptions.IgnoreCase);
+            if (titlePath.Success && Path.IsPathFullyQualified(titlePath.Groups[1].Value)
+                && IsValid(titlePath.Groups[1].Value, plugin)) return Path.GetFullPath(titlePath.Groups[1].Value);
+        }
         string? path = FromCommandLine(w.ProcessId, plugin);
         // Normalize separators: Godot passes Z:/a/b.
         try { if (path != null) path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); } catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { path = null; }
@@ -210,7 +218,8 @@ internal sealed class ProjectDetector(ProjectCache cache)
             var hit = argv.Skip(1).FirstOrDefault(a => a.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && a.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) && a.Length > prefix.Length + suffix.Length);
             return hit?[prefix.Length..^suffix.Length];
         }
-        if (i == 0) return null;
+        if (i == 0) return plugin.ProjectPicker == "blender-file"
+            ? argv.Skip(1).FirstOrDefault(a => Path.IsPathFullyQualified(a) && IsValid(a, plugin)) : null;
         string flag = plugin.LaunchArguments[i - 1];
         int f = Array.FindIndex(argv, 1, a => a.Equals(flag, StringComparison.OrdinalIgnoreCase));
         return f > 0 && f + 1 < argv.Length ? argv[f + 1] : null;
@@ -337,7 +346,7 @@ internal sealed class PluginEditor : Form
     public PluginEditor(AppPlugin? value=null)
     {
         Text="확장 기능 추가 / 편집"; Width=660;Height=480;StartPosition=FormStartPosition.CenterParent;Font=new System.Drawing.Font("Malgun Gothic",9);
-        picker.Items.AddRange(["folder", "workspace-or-folder", "unity-folder", "godot-folder", "aseprite-files"]); picker.SelectedIndex=0;
+        picker.Items.AddRange(["folder", "workspace-or-folder", "unity-folder", "godot-folder", "blender-file", "aseprite-files"]); picker.SelectedIndex=0;
         var panel=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=8,Padding=new Padding(12),AutoScroll=true};
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,155)); panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
         void Add(string title,Control c,int row){panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));panel.Controls.Add(new Label{Text=title,AutoSize=true,Margin=new Padding(3,8,3,3)},0,row);panel.Controls.Add(c,1,row);}

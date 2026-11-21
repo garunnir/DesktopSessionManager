@@ -86,3 +86,7 @@ VS Code 프로젝트 폴더 항목의 **선택 편집**에서 Claude Remote Cont
 복원으로 실행하는 앱에는 VS Code 확장 호스트의 `ELECTRON_RUN_AS_NODE` 환경 변수를 전달하지 않습니다(이 변수가 있을 때만 셸을 거치지 않고 EXE를 직접 실행하며, 관리자 권한이 필요하면 셸 실행으로 다시 시도합니다). 프로그램이 오류로 종료하면 종료 코드를 표시합니다. Claude는 별도 터미널의 단일 세션으로 실행되며, 연결 진단 로그는 앱 데이터 폴더의 `Logs/claude-remote-*.log`에 남습니다.
 
 실제 복원 진단: `dotnet run --project tests/DesktopSessionManager.Tests.csproj -- --live-restore <프로필.json>`은 별도 앱 데이터로 Remote Control을 설정한 VS Code 항목 하나를 실제 복원합니다. 이 명령은 VS Code 창을 열거나 이동하고 Claude 세션을 시작하므로, 일반 테스트와 구분해 명시적으로 실행하세요.
+
+## Blender 프로젝트 복원
+
+Blender 창의 **프로젝트 지정**에서 복원할 `.blend` 파일을 선택한 뒤 프로필을 저장하세요. 복원 시 해당 파일 경로로 Blender를 실행합니다. 창 제목에 전체 `.blend` 경로가 표시되는 경우 자동으로 감지합니다.

@@ -1,0 +1,8 @@
+{
+  "Id": "blender",
+  "Name": "Blender",
+  "ExecutableNames": ["blender.exe"],
+  "ProjectPicker": "blender-file",
+  "LaunchArguments": ["{projectPath}"],
+  "WaitSeconds": 90
+}
