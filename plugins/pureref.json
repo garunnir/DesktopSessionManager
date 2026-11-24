@@ -1,0 +1,8 @@
+{
+  "Id": "pureref",
+  "Name": "PureRef",
+  "ExecutableNames": ["PureRef.exe"],
+  "ProjectPicker": "pureref-file",
+  "LaunchArguments": ["{projectPath}"],
+  "WaitSeconds": 30
+}

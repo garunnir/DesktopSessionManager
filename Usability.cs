@@ -133,8 +133,27 @@ public sealed partial class MainForm
         ok.Click += (_, _) => { if (action()) dialog.DialogResult = DialogResult.OK; };
         buttons.Controls.AddRange([ok, cancel]); panel.Controls.Add(buttons); dialog.CancelButton = cancel;
     }
+    // When the saved EXE is gone (e.g. an app update moved it to a new version folder), use the
+    // program Windows opens the window's project/open files with, if it is the same app.
+    private SavedWindow WithInstalledExecutable(SavedWindow w)
+    {
+        if (File.Exists(w.Path)) return w;
+        var plugin = pluginsCatalog.ById(PluginIdOf(w)) ?? pluginsCatalog.ForExe(w.Path);
+        var names = plugin?.ExecutableNames ?? [Path.GetFileName(w.Path)];
+        foreach (var file in w.OpenFiles.Prepend(w.ProjectPath).Where(File.Exists))
+        {
+            if (AppLaunch.AssociatedExecutable(file) is not { } associated) continue;
+            // The association can point at a launcher (Blender: blender-launcher.exe) that starts the
+            // real EXE; launch the real one beside it so the new window matches this entry.
+            var exe = names.Select(n => Path.Combine(Path.GetDirectoryName(associated)!, n)).FirstOrDefault(File.Exists);
+            if (exe == null) continue;
+            var copy = ProfileStore.Clone(w); copy.Path = exe; return copy;
+        }
+        return w;
+    }
     private string PathIssue(SavedWindow w)
     {
+        w = WithInstalledExecutable(w);
         if (!File.Exists(w.Path)) return "실행 파일 없음";
         var plugin = pluginsCatalog.ById(PluginIdOf(w)) ?? pluginsCatalog.ForExe(w.Path);
         if (w.ProjectPath != "" && (plugin == null || !ProjectDetector.IsValid(w.ProjectPath, plugin))) return "프로젝트 경로 확인 필요";
@@ -173,6 +192,7 @@ public sealed partial class MainForm
                 using var picker = new OpenFileDialog { Multiselect = plugin.OpensFiles, Filter = plugin.OpensFiles ? "모든 파일|*.*" : "VS Code workspace|*.code-workspace" };
                 if (picker.ShowDialog(dialog) == DialogResult.OK) { if (plugin.OpensFiles) files.Lines = picker.FileNames; else project.Text = picker.FileName; }
             }
+            else if (ProjectFileFilter(plugin) is { } filter) { using var picker = new OpenFileDialog { Filter = filter }; if (picker.ShowDialog(dialog) == DialogResult.OK) project.Text = picker.FileName; }
             else { using var picker = new FolderBrowserDialog(); if (picker.ShowDialog(dialog) == DialogResult.OK) project.Text = picker.SelectedPath; }
         };
         panel.Controls.Add(new Label { Text = "대상 데스크톱 (1부터)", AutoSize = true });

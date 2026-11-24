@@ -28,7 +28,7 @@ public sealed partial class MainForm
                 var current = ScanIdentified();
                 foreach (var w in data.Windows)
                 {
-                    var matches = WindowMatcher.Candidates(current, w);
+                    var matches = WindowMatcher.Candidates(current, WithInstalledExecutable(w));
                     string action = matches.Count == 1 ? "기존 창 재사용" : matches.Count > 1 ? "연결 모호: 복원 보류" : "새 앱 실행";
                     string issue = PathIssue(w);
                     if (issue != "") action = issue;
@@ -140,6 +140,11 @@ public sealed partial class MainForm
         Report("복원 시작");
         token.ThrowIfCancellationRequested();
         if (target.Pinned) return "고정 창 건너뜀";
+        if (WithInstalledExecutable(target) is var installed && installed != target)
+        {
+            Report("저장된 실행 파일 없음: 연결 프로그램 사용 " + installed.Path);
+            target = installed;
+        }
         if (!target.AllDesktops && (target.DesktopIndex < 0 || target.DesktopIndex >= Native.GetDesktopCount())) return "대상 데스크톱 없음";
         Report("현재 창 검색 중");
         var matches = WindowMatcher.Candidates(ScanIdentified().Where(x => !reserved.ContainsKey(x.Handle)), target);

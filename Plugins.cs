@@ -13,7 +13,7 @@ public sealed class AppPlugin
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public List<string> ExecutableNames { get; set; } = [];
-    public string ProjectPicker { get; set; } = "folder"; // folder, workspace-or-folder, unity-folder, godot-folder, aseprite-files
+    public string ProjectPicker { get; set; } = "folder"; // folder, workspace-or-folder, unity-folder, godot-folder, blender-file, pureref-file, aseprite-files
     public List<string> LaunchArguments { get; set; } = [];
     public int WaitSeconds { get; set; } = 45;
     // The app restores a list of open files ({file}) instead of one project ({projectPath}).
@@ -34,7 +34,7 @@ internal sealed class PluginCatalog
         if (string.IsNullOrWhiteSpace(p.Name) || p.Name.Length > 100) return "프로그램 이름은 1~100자로 지정하세요.";
         if (p.ExecutableNames.Count == 0 || p.ExecutableNames.Any(n => string.IsNullOrWhiteSpace(n) || Path.GetFileName(n) != n || !n.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)))
             return "실행 파일명은 경로 없이 EXE 이름으로 지정하세요. (예: Code.exe)";
-        if (p.ProjectPicker is not ("folder" or "workspace-or-folder" or "unity-folder" or "godot-folder" or "blender-file" or "aseprite-files")) return "지원하지 않는 프로젝트 선택 방식입니다.";
+        if (p.ProjectPicker is not ("folder" or "workspace-or-folder" or "unity-folder" or "godot-folder" or "blender-file" or "pureref-file" or "aseprite-files")) return "지원하지 않는 프로젝트 선택 방식입니다.";
         string variable = p.OpensFiles ? "{file}" : "{projectPath}";
         if (p.LaunchArguments.Count > 20 || p.LaunchArguments.Any(a => a.Length > 4096 || a.Replace(variable, "").IndexOfAny(['{', '}']) >= 0))
             return $"인자는 20개 이내이며 {variable} 변수만 사용할 수 있습니다.";
@@ -130,6 +130,7 @@ internal sealed class ProjectDetector(ProjectCache cache)
         if (plugin.ProjectPicker == "godot-folder") return File.Exists(Path.Combine(path, "project.godot"));
         if (plugin.ProjectPicker == "workspace-or-folder") return Directory.Exists(path) || (File.Exists(path) && path.EndsWith(".code-workspace", StringComparison.OrdinalIgnoreCase));
         if (plugin.ProjectPicker == "blender-file") return File.Exists(path) && path.EndsWith(".blend", StringComparison.OrdinalIgnoreCase);
+        if (plugin.ProjectPicker == "pureref-file") return File.Exists(path) && path.EndsWith(".pur", StringComparison.OrdinalIgnoreCase);
         return Directory.Exists(path);
     }
 
@@ -153,6 +154,7 @@ internal sealed class ProjectDetector(ProjectCache cache)
 
     public string? Detect(LiveWindow w, AppPlugin plugin)
     {
+        if (plugin.ProjectPicker == "pureref-file") return PureRefOpenFile(w, plugin);
         if (plugin.ProjectPicker == "blender-file")
         {
             // Blender updates the bracketed absolute filename when another file is opened.
@@ -200,6 +202,47 @@ internal sealed class ProjectDetector(ProjectCache cache)
             or InvalidOperationException or System.ComponentModel.Win32Exception) { return null; }
     }
 
+    // PureRef's title is only "PureRef", so the open board is not visible there. PureRef records every
+    // board it opens or saves as RecentFiles0 in PureRef.ini; with a single PureRef running that is the
+    // board in its window. With several, only each process's own launch argument can tell them apart.
+    private static string? PureRefOpenFile(LiveWindow w, AppPlugin plugin)
+    {
+        if (PureRefPathFromTitle(w.Data.Title) is { } current) return current;
+        string? path = null;
+        try
+        {
+            var running = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(w.Data.Path));
+            int count = running.Length;
+            foreach (var p in running) p.Dispose();
+            if (count == 1)
+            {
+                // Portable installs keep PureRef.ini beside the EXE.
+                string portable = Path.Combine(Path.GetDirectoryName(w.Data.Path) ?? "", "PureRef.ini");
+                string ini = File.Exists(portable) ? portable
+                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PureRef", "PureRef.ini");
+                if (File.Exists(ini))
+                    path = File.ReadLines(ini, Encoding.UTF8).Select(x => x.Trim())
+                        .FirstOrDefault(x => x.StartsWith("RecentFiles0=", StringComparison.OrdinalIgnoreCase))?["RecentFiles0=".Length..];
+            }
+            if (path == null || !IsValid(path, plugin)) path = FromCommandLine(w.ProcessId, plugin);
+            return path != null && IsValid(path, plugin) ? Path.GetFullPath(path) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException
+            or NotSupportedException or InvalidOperationException) { return null; }
+    }
+
+    // PureRef 2 can include the full scene path after " - PureRef - ". Prefer
+    // that window-specific value to global recent history (also for old profiles).
+    internal static string? PureRefPathFromTitle(string title)
+    {
+        const string marker = " - PureRef - ";
+        int at = title.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (at < 0) return null;
+        string path = title[(at + marker.Length)..].Trim();
+        return Path.IsPathFullyQualified(path) && path.EndsWith(".pur", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFullPath(path) : null;
+    }
+
     private static List<string> Segments(string title, string separator) =>
         title.Split(separator).Select(x => x.Trim().TrimStart('●', ' ')).Where(x => x != "").ToList();
 
@@ -218,7 +261,7 @@ internal sealed class ProjectDetector(ProjectCache cache)
             var hit = argv.Skip(1).FirstOrDefault(a => a.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && a.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) && a.Length > prefix.Length + suffix.Length);
             return hit?[prefix.Length..^suffix.Length];
         }
-        if (i == 0) return plugin.ProjectPicker == "blender-file"
+        if (i == 0) return plugin.ProjectPicker is "blender-file" or "pureref-file"
             ? argv.Skip(1).FirstOrDefault(a => Path.IsPathFullyQualified(a) && IsValid(a, plugin)) : null;
         string flag = plugin.LaunchArguments[i - 1];
         int f = Array.FindIndex(argv, 1, a => a.Equals(flag, StringComparison.OrdinalIgnoreCase));
@@ -346,7 +389,7 @@ internal sealed class PluginEditor : Form
     public PluginEditor(AppPlugin? value=null)
     {
         Text="확장 기능 추가 / 편집"; Width=660;Height=480;StartPosition=FormStartPosition.CenterParent;Font=new System.Drawing.Font("Malgun Gothic",9);
-        picker.Items.AddRange(["folder", "workspace-or-folder", "unity-folder", "godot-folder", "blender-file", "aseprite-files"]); picker.SelectedIndex=0;
+        picker.Items.AddRange(["folder", "workspace-or-folder", "unity-folder", "godot-folder", "blender-file", "pureref-file", "aseprite-files"]); picker.SelectedIndex=0;
         var panel=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=8,Padding=new Padding(12),AutoScroll=true};
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,155)); panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
         void Add(string title,Control c,int row){panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));panel.Controls.Add(new Label{Text=title,AutoSize=true,Margin=new Padding(3,8,3,3)},0,row);panel.Controls.Add(c,1,row);}

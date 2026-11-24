@@ -39,6 +39,15 @@ internal static class ProfileStore
         if (result.SchemaVersion is < 1 or > 3 || result.Windows == null || result.Layouts == null || result.Windows.Any(InvalidWindow)
             || result.Layouts.Any(l => l == null || l.Windows == null || l.Windows.Any(InvalidWindow)))
             throw new InvalidDataException("지원하지 않거나 손상된 프로필");
+        // Earlier versions captured PureRef before its project plugin existed.
+        // Recover only the path recorded by that window, never today's recent file.
+        foreach (var w in result.Windows.Concat(result.Layouts.SelectMany(l => l.Windows)))
+            if (w.ProjectPath == "" && Path.GetFileName(w.Path).Equals("PureRef.exe", StringComparison.OrdinalIgnoreCase)
+                && ProjectDetector.PureRefPathFromTitle(w.Title) is { } scene)
+            {
+                w.ProjectPath = scene;
+                w.PluginId = "pureref";
+            }
         return result;
     }
     private static bool InvalidWindow(SavedWindow w) => w == null || w.Path == null || w.Title == null || w.ProjectPath == null || w.PluginId == null || w.OpenFiles == null || w.OpenFiles.Any(f => f == null);

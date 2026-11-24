@@ -1,4 +1,4 @@
-﻿using DesktopSessionManager;
+using DesktopSessionManager;
 using System.Text.Json;
 
 if (args.Length == 2 && args[0] == "--live-restore")
@@ -24,8 +24,11 @@ try
     Assert(AppLaunch.Create(@"C:\App.lnk", @"C:\work").UseShellExecute, "Non-EXE targets keep shell launch even with Electron Node mode");
     Environment.SetEnvironmentVariable("ELECTRON_RUN_AS_NODE", null);
     Assert(AppLaunch.Create(@"C:\Code.exe", @"C:\work").UseShellExecute, "Launches use the shell (UAC, shortcuts) when Electron Node mode is not inherited");
+    var blenderLaunch = AppLaunch.Create(@"C:\Blender\blender.exe", @"C:\work");
+    Assert(!blenderLaunch.UseShellExecute && blenderLaunch.CreateNoWindow, "Blender launches its GUI without a closeable console");
 }
 finally { Environment.SetEnvironmentVariable("ELECTRON_RUN_AS_NODE", electronMode); }
+Assert(AppLaunch.AssociatedExecutable(@"C:\work\a.dsm-unregistered-ext") == null && AppLaunch.AssociatedExecutable(@"C:\work\noext") == null, "Unregistered or missing file types resolve to no associated program");
 LiveWindow Live(int id, string project, string title = "same title") => new()
 {
     Handle = (IntPtr)id, ProcessId = (uint)id,
@@ -96,6 +99,12 @@ Directory.CreateDirectory(root);
 try
 {
     string path = Path.Combine(root, "profile.json");
+    var pureRefWindow = new SavedWindow { Path = @"C:\PureRef\PureRef.exe", Title = @"Board - PureRef - C:\art files\한글 - board.pur" };
+    ProfileStore.Write(path, new Snapshot { Windows = [pureRefWindow], Layouts = [new MonitorLayout { Windows = [pureRefWindow] }] });
+    var recovered = ProfileStore.Read(path);
+    Assert(recovered.Windows[0].ProjectPath == @"C:\art files\한글 - board.pur" && recovered.Windows[0].PluginId == "pureref"
+        && recovered.Layouts[0].Windows[0].ProjectPath == recovered.Windows[0].ProjectPath, "Old PureRef profiles recover the saved scene in base and monitor layouts");
+    Assert(ProjectDetector.PureRefPathFromTitle("PureRef") == null, "Empty PureRef titles do not invent a scene path");
     foreach (int schema in new[] { 1, 2, 3 })
     {
         File.WriteAllText(path, "{\"SchemaVersion\":" + schema + ",\"Name\":\"legacy\",\"Windows\":[{\"Path\":\"app.exe\"}]}");

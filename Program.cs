@@ -815,9 +815,9 @@ public sealed partial class MainForm : Form
             return;
         }
         string chosen="";
-        if(plugin.ProjectPicker=="blender-file")
+        if(ProjectFileFilter(plugin) is {} filter)
         {
-            using var file=new OpenFileDialog{Filter="Blender 프로젝트 (*.blend)|*.blend",Title="Blender 프로젝트 파일 선택"};
+            using var file=new OpenFileDialog{Filter=filter,Title=plugin.Name+" 파일 선택"};
             if(file.ShowDialog()!=DialogResult.OK)return;
             chosen=file.FileName;
         }
@@ -847,6 +847,13 @@ public sealed partial class MainForm : Form
         ShowProject(windows.SelectedItems[0]);
         Write($"{plugin.Name} 프로젝트 지정: {chosen} (이 창을 왼쪽 프로필에 끌어다 놓고 저장하세요)");
     }
+    // Pickers whose project is one file rather than a folder.
+    private static string? ProjectFileFilter(AppPlugin plugin) => plugin.ProjectPicker switch
+    {
+        "blender-file" => "Blender 프로젝트 (*.blend)|*.blend",
+        "pureref-file" => "PureRef 보드 (*.pur)|*.pur",
+        _ => null
+    };
     private string ProfilePath(string p) => Path.Combine(folder, p + ".json");
     // Restoring or saving a profile makes it the startup/hotkey target.
     private void MarkRecent(string p)
